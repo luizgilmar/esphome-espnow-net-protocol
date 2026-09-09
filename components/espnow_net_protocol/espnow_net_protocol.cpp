@@ -26,9 +26,76 @@ void EspNowNetProtocolComponent::loop() {
   if (!radio_.initialized() || is_failed()) return;
   process_send_completion_(now_ms);
   process_received_frame_();
+  process_application_message_(now_ms);
+  command_dispatcher_.loop(now_ms);
   sender_.loop(now_ms);
+  process_owned_sender_completion_();
+  process_dispatcher_(now_ms);
   dispatch_application_ack_();
   dispatch_sender_frame_(now_ms);
+}
+
+void EspNowNetProtocolComponent::process_application_message_(
+    uint32_t now_ms) {
+  if (!runtime_.application_message_ready()) return;
+  const EspNowFrameKind kind = runtime_.application_message_kind();
+  // Keep the reassembler-owned payload in place until its bounded consumer is
+  // ready. This prevents an ACCEPTED delivery ACK followed by a local drop.
+  if ((kind == EspNowFrameKind::COMMAND &&
+       command_dispatcher_.state() != InboundCommandDispatcherState::IDLE) ||
+      (kind == EspNowFrameKind::RESULT && result_message_ready_))
+    return;
+  EspNowInboundApplicationMessage inbound{};
+  if (!runtime_.take_application_message(inbound)) return;
+  if (inbound.message.envelope.kind == EspNowFrameKind::COMMAND) {
+    if (!command_dispatcher_.accept(inbound, now_ms)) {
+      ESP_LOGW(TAG, "Inbound command dispatcher busy tx=%llu",
+               static_cast<unsigned long long>(
+                   inbound.message.envelope.transaction_id));
+    }
+    return;
+  }
+  if (inbound.message.envelope.kind == EspNowFrameKind::RESULT) {
+    result_message_ = inbound;
+    result_message_ready_ = true;
+    return;
+  }
+  ESP_LOGW(TAG, "Inbound application message dropped kind=%u tx=%llu",
+           static_cast<unsigned>(inbound.message.envelope.kind),
+           static_cast<unsigned long long>(
+               inbound.message.envelope.transaction_id));
+}
+
+void EspNowNetProtocolComponent::process_dispatcher_(uint32_t now_ms) {
+  if (!command_dispatcher_.has_result() ||
+      reliable_message_owner_ != ReliableMessageOwner::NONE ||
+      sender_.state() != ReliableSenderState::IDLE)
+    return;
+  PendingNetResult pending{};
+  if (!command_dispatcher_.take_result(pending)) return;
+  if (!sender_.start(pending.peer_index, EspNowFrameKind::RESULT,
+                     pending.transaction_id, pending.payload.data.data(),
+                     pending.payload.data.size())) {
+    result_delivery_failure_count_++;
+    return;
+  }
+  reliable_message_owner_ = ReliableMessageOwner::DISPATCHER_RESULT;
+  (void) now_ms;
+}
+
+void EspNowNetProtocolComponent::process_owned_sender_completion_() {
+  if (reliable_message_owner_ != ReliableMessageOwner::DISPATCHER_RESULT)
+    return;
+  if (sender_.state() == ReliableSenderState::ACKNOWLEDGED) {
+    result_delivery_success_count_++;
+    sender_.reset();
+    reliable_message_owner_ = ReliableMessageOwner::NONE;
+  } else if (sender_.state() == ReliableSenderState::REJECTED ||
+             sender_.state() == ReliableSenderState::TIMED_OUT) {
+    result_delivery_failure_count_++;
+    sender_.reset();
+    reliable_message_owner_ = ReliableMessageOwner::NONE;
+  }
 }
 
 void EspNowNetProtocolComponent::process_send_completion_(uint32_t now_ms) {
@@ -96,7 +163,8 @@ void EspNowNetProtocolComponent::dispatch_application_ack_() {
 void EspNowNetProtocolComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "ESP-NOW NetProtocol: %s channel=%u current=%u peers=%u "
-                "channel_match=%s rx=%u dropped=%u tx=%u failed=%u",
+                "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
+                "result_ok=%u result_failed=%u",
                 radio_.initialized() ? "READY" : "WAITING",
                 static_cast<unsigned>(radio_.expected_channel()),
                 static_cast<unsigned>(radio_.current_channel()),
@@ -105,7 +173,9 @@ void EspNowNetProtocolComponent::dump_config() {
                 static_cast<unsigned>(radio_.received_frame_count()),
                 static_cast<unsigned>(radio_.dropped_frame_count()),
                 static_cast<unsigned>(radio_.sent_frame_count()),
-                static_cast<unsigned>(radio_.failed_send_count()));
+                static_cast<unsigned>(radio_.failed_send_count()),
+                static_cast<unsigned>(result_delivery_success_count_),
+                static_cast<unsigned>(result_delivery_failure_count_));
 }
 
 }  // namespace espnow_net_protocol

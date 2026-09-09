@@ -105,6 +105,14 @@ class EspNowProtocolRuntime {
     return true;
   }
 
+  bool application_message_ready() const { return application_message_ready_; }
+
+  EspNowFrameKind application_message_kind() const {
+    if (!application_message_ready_) return EspNowFrameKind::ACK;
+    const EspNowFrameEnvelope *envelope = reassembler_.complete_envelope();
+    return envelope == nullptr ? EspNowFrameKind::ACK : envelope->kind;
+  }
+
   bool take_delivery_ack(EspNowAckPayload &ack) {
     if (!delivery_ack_ready_) return false;
     ack = delivery_ack_;

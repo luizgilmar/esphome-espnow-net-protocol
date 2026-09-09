@@ -1,6 +1,7 @@
 #pragma once
 
 #include "esphome/core/component.h"
+#include "command_dispatcher.h"
 #include "espidf_espnow_encrypted_radio.h"
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
@@ -38,12 +39,26 @@ class EspNowNetProtocolComponent : public Component {
   bool start_reliable_message(PeerIndex peer, EspNowFrameKind kind,
                               TransactionId transaction_id,
                               const uint8_t *data, size_t size) {
-    return sender_.start(peer, kind, transaction_id, data, size);
+    if (reliable_message_owner_ != ReliableMessageOwner::NONE ||
+        !sender_.start(peer, kind, transaction_id, data, size))
+      return false;
+    reliable_message_owner_ = ReliableMessageOwner::EXTERNAL;
+    return true;
   }
   ReliableSenderState sender_state() const { return sender_.state(); }
-  void reset_sender() { sender_.reset(); }
+  void reset_sender() {
+    sender_.reset();
+    reliable_message_owner_ = ReliableMessageOwner::NONE;
+  }
   bool take_application_message(EspNowInboundApplicationMessage &message) {
-    return runtime_.take_application_message(message);
+    if (!result_message_ready_) return false;
+    message = result_message_;
+    result_message_ = {};
+    result_message_ready_ = false;
+    return true;
+  }
+  void set_command_handler(NetCommandHandler *handler) {
+    command_dispatcher_.set_handler(handler);
   }
 
   void setup() override;
@@ -52,10 +67,21 @@ class EspNowNetProtocolComponent : public Component {
 
  protected:
   enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK };
+  enum class ReliableMessageOwner : uint8_t {
+    NONE,
+    EXTERNAL,
+    DISPATCHER_RESULT,
+  };
   EspIdfEspNowEncryptedRadio radio_{};
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
+  InboundCommandDispatcher command_dispatcher_{};
   EspNowRetryPolicy retry_policy_{};
+  EspNowInboundApplicationMessage result_message_{};
+  bool result_message_ready_{false};
+  ReliableMessageOwner reliable_message_owner_{ReliableMessageOwner::NONE};
+  uint32_t result_delivery_success_count_{0};
+  uint32_t result_delivery_failure_count_{0};
   uint64_t local_boot_id_{0};
   uint32_t ack_sequence_{0};
   RadioTransmissionOwner radio_transmission_owner_{
@@ -64,6 +90,9 @@ class EspNowNetProtocolComponent : public Component {
 
   void process_send_completion_(uint32_t now_ms);
   void process_received_frame_();
+  void process_application_message_(uint32_t now_ms);
+  void process_dispatcher_(uint32_t now_ms);
+  void process_owned_sender_completion_();
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
 };

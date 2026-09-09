@@ -29,6 +29,11 @@ espnow_net_protocol:
 Device components reference this instance by its ESPHome ID. MAC addresses and
 keys remain private to the protocol component.
 
+Inbound `COMMAND` messages are dispatched through the neutral asynchronous
+`NetCommandHandler` port. Functional `RESULT` messages are returned through the
+same reliable sender, explicitly arbitrated against locally originated
+commands.
+
 ## Constraints
 
 - ESP-IDF backend;
