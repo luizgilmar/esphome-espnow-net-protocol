@@ -37,4 +37,6 @@ keys remain private to the protocol component.
 - up to sixteen statically allocated peers;
 - fixed-capacity storage and no dynamic containers in the protocol runtime;
 - bounded reliable sender with correlated ACK and whole-message retry;
+- neutral asynchronous inbound command dispatcher with correlated functional
+  results;
 - MIT licensed.
