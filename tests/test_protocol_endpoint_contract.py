@@ -81,7 +81,8 @@ def test_endpoint_arbitrates_one_reliable_sender_by_owner() -> None:
     header = read("espnow_net_protocol.h")
     source = read("espnow_net_protocol.cpp")
     assert "enum class ReliableMessageOwner" in header
-    assert "ReliableMessageOwner::EXTERNAL" in header
+    assert "ReliableMessageOwner::API_CALLER" in header
+    assert "ReliableMessageOwner::EXTERNAL" not in header
     assert "ReliableMessageOwner::DISPATCHER_RESULT" in source
     assert "result_delivery_success_count_" in source
     assert "result_delivery_failure_count_" in source

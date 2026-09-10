@@ -49,7 +49,7 @@ class EspNowNetProtocolComponent : public Component {
     if (reliable_message_owner_ != ReliableMessageOwner::NONE ||
         !sender_.start(peer, kind, transaction_id, data, size))
       return false;
-    reliable_message_owner_ = ReliableMessageOwner::EXTERNAL;
+    reliable_message_owner_ = ReliableMessageOwner::API_CALLER;
     return true;
   }
   ReliableSenderState sender_state() const { return sender_.state(); }
@@ -83,7 +83,7 @@ class EspNowNetProtocolComponent : public Component {
   enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK };
   enum class ReliableMessageOwner : uint8_t {
     NONE,
-    EXTERNAL,
+    API_CALLER,
     DISPATCHER_RESULT,
     DECLARATIVE_COMMAND,
   };
