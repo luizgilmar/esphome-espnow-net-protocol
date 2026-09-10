@@ -74,42 +74,70 @@ PeerIndex EspIdfEspNowEncryptedRadio::peer_index(
 
 void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
   if (!configured_ || initialized_ || peers_.size() == 0 ||
-      now_ms - last_initialization_attempt_ms_ < INITIALIZATION_RETRY_MS)
+      now_ms - last_channel_poll_ms_ < CHANNEL_POLL_INTERVAL_MS)
     return;
-  last_initialization_attempt_ms_ = now_ms;
+  last_channel_poll_ms_ = now_ms;
 
   wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
   uint8_t primary = 0;
-  if (esp_wifi_get_channel(&primary, &secondary) != ESP_OK) return;
+  if (esp_wifi_get_channel(&primary, &secondary) != ESP_OK) {
+    channel_matches_ = false;
+    channel_stable_ = false;
+    return;
+  }
   current_channel_ = primary;
   channel_matches_ = primary == expected_channel_;
   if (!channel_matches_) {
+    channel_stable_ = false;
     ESP_LOGW(TAG, "Waiting for configured Wi-Fi channel expected=%u current=%u",
              static_cast<unsigned>(expected_channel_),
              static_cast<unsigned>(current_channel_));
     return;
   }
-  if (!initialize_())
-    ESP_LOGW(TAG, "Encrypted ESP-NOW initialization deferred");
+  if (!channel_stable_) {
+    channel_stable_ = true;
+    channel_stable_since_ms_ = now_ms;
+    ESP_LOGD(TAG, "Wi-Fi channel matched; waiting %u ms before ESP-NOW init",
+             static_cast<unsigned>(CHANNEL_STABILIZATION_MS));
+    return;
+  }
+  if (now_ms - channel_stable_since_ms_ < CHANNEL_STABILIZATION_MS) return;
+  if (last_initialization_attempt_ms_ != 0 &&
+      now_ms - last_initialization_attempt_ms_ < INITIALIZATION_RETRY_MS)
+    return;
+
+  last_initialization_attempt_ms_ = now_ms;
+  if (!initialize_()) {
+    ESP_LOGW(TAG, "Encrypted ESP-NOW initialization deferred error=%s (0x%08x)",
+             esp_err_to_name(static_cast<esp_err_t>(last_initialization_error_)),
+             static_cast<unsigned>(last_initialization_error_));
+  }
 }
 
 bool EspIdfEspNowEncryptedRadio::initialize_() {
-  if (instance_ != nullptr && instance_ != this) return false;
+  if (instance_ != nullptr && instance_ != this) {
+    last_initialization_error_ = ESP_ERR_INVALID_STATE;
+    return false;
+  }
   esp_err_t result = esp_now_init();
+  last_initialization_error_ = result;
   if (result != ESP_OK) return false;
   instance_ = this;
 
   result = esp_now_set_pmk(pmk_);
+  last_initialization_error_ = result;
   if (result != ESP_OK) {
     rollback_initialization_();
     return false;
   }
   result = esp_now_register_recv_cb(receive_callback_);
+  last_initialization_error_ = result;
   if (result != ESP_OK) {
     rollback_initialization_();
     return false;
   }
   result = esp_now_register_send_cb(send_callback_);
+  last_initialization_error_ = result;
   if (result != ESP_OK) {
     esp_now_unregister_recv_cb();
     rollback_initialization_();
@@ -126,6 +154,7 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
     peer.ifidx = WIFI_IF_STA;
     peer.encrypt = true;
     result = esp_now_add_peer(&peer);
+    last_initialization_error_ = result;
     if (result != ESP_OK) {
       esp_now_unregister_send_cb();
       esp_now_unregister_recv_cb();
@@ -135,6 +164,7 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
   }
 
   initialized_ = true;
+  last_initialization_error_ = ESP_OK;
   ESP_LOGI(TAG, "Encrypted ESP-NOW ready channel=%u peers=%u",
            static_cast<unsigned>(current_channel_),
            static_cast<unsigned>(peers_.size()));

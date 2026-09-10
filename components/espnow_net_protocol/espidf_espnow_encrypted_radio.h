@@ -20,7 +20,9 @@ class EspIdfEspNowEncryptedRadio {
  public:
   static constexpr size_t KEY_SIZE = 16;
   static constexpr size_t MAX_PEERS = PeerRegistry::CAPACITY;
-  static constexpr uint32_t INITIALIZATION_RETRY_MS = 1000;
+  static constexpr uint32_t CHANNEL_POLL_INTERVAL_MS = 250;
+  static constexpr uint32_t CHANNEL_STABILIZATION_MS = 5000;
+  static constexpr uint32_t INITIALIZATION_RETRY_MS = 5000;
   static constexpr size_t RX_QUEUE_CAPACITY = 3;
   static constexpr size_t SEND_COMPLETION_QUEUE_CAPACITY = 4;
 
@@ -80,7 +82,10 @@ class EspIdfEspNowEncryptedRadio {
   static EspIdfEspNowEncryptedRadio *instance_;
   PeerRegistry peers_{};
   uint8_t pmk_[KEY_SIZE]{};
+  uint32_t last_channel_poll_ms_{0};
+  uint32_t channel_stable_since_ms_{0};
   uint32_t last_initialization_attempt_ms_{0};
+  int32_t last_initialization_error_{0};
   std::atomic<uint32_t> received_frame_count_{0};
   std::atomic<uint32_t> dropped_frame_count_{0};
   std::atomic<uint32_t> sent_frame_count_{0};
@@ -94,6 +99,7 @@ class EspIdfEspNowEncryptedRadio {
   bool configured_{false};
   bool initialized_{false};
   bool channel_matches_{false};
+  bool channel_stable_{false};
 };
 
 }  // namespace espnow_net_protocol
