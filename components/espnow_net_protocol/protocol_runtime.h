@@ -113,6 +113,17 @@ class EspNowProtocolRuntime {
     return envelope == nullptr ? EspNowFrameKind::ACK : envelope->kind;
   }
 
+  TransactionId application_message_transaction_id() const {
+    if (!application_message_ready_) return 0;
+    const EspNowFrameEnvelope *envelope = reassembler_.complete_envelope();
+    return envelope == nullptr ? 0 : envelope->transaction_id;
+  }
+
+  PeerIndex application_message_peer_index() const {
+    return application_message_ready_ ? application_peer_index_
+                                      : INVALID_PEER_INDEX;
+  }
+
   bool take_delivery_ack(EspNowAckPayload &ack) {
     if (!delivery_ack_ready_) return false;
     ack = delivery_ack_;

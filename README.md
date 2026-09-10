@@ -34,6 +34,22 @@ Inbound `COMMAND` messages are dispatched through the neutral asynchronous
 same reliable sender, explicitly arbitrated against locally originated
 commands.
 
+Any ESP32 consumer can originate a reliable command declaratively:
+
+```yaml
+- espnow_net_protocol.send_command:
+    id: espnow_network
+    peer: tx_quartogian
+    device: tx_quartogian
+    resource: night_scene
+    command: toggle_scene
+    timeout: 5s
+```
+
+At startup, the radio waits until the configured Wi-Fi channel remains stable
+for five seconds before initializing ESP-NOW. Failed initialization attempts
+are rate-limited and report the underlying ESP-IDF error.
+
 ## Constraints
 
 - ESP-IDF backend;

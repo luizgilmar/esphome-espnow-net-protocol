@@ -2,15 +2,22 @@
 
 #include "esphome/core/component.h"
 #include "command_dispatcher.h"
+#include "command_codec.h"
 #include "espidf_espnow_encrypted_radio.h"
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
+#include "result_codec.h"
 
 namespace esphome {
 namespace espnow_net_protocol {
 
 class EspNowNetProtocolComponent : public Component {
  public:
+  enum class DeclarativeCommandState : uint8_t {
+    IDLE,
+    WAITING_FOR_DELIVERY_ACK,
+    WAITING_FOR_RESULT,
+  };
   bool configure(uint8_t channel, const char *pmk_hex) {
     return radio_.configure(channel, pmk_hex);
   }
@@ -60,6 +67,13 @@ class EspNowNetProtocolComponent : public Component {
   void set_command_handler(NetCommandHandler *handler) {
     command_dispatcher_.set_handler(handler);
   }
+  bool send_command(const char *peer_id, const char *device_id,
+                    const char *resource, const char *command,
+                    const char *payload, uint32_t timeout_ms,
+                    uint32_t now_ms);
+  DeclarativeCommandState declarative_command_state() const {
+    return declarative_command_state_;
+  }
 
   void setup() override;
   void loop() override;
@@ -71,6 +85,7 @@ class EspNowNetProtocolComponent : public Component {
     NONE,
     EXTERNAL,
     DISPATCHER_RESULT,
+    DECLARATIVE_COMMAND,
   };
   EspIdfEspNowEncryptedRadio radio_{};
   EspNowProtocolRuntime runtime_{};
@@ -82,6 +97,16 @@ class EspNowNetProtocolComponent : public Component {
   ReliableMessageOwner reliable_message_owner_{ReliableMessageOwner::NONE};
   uint32_t result_delivery_success_count_{0};
   uint32_t result_delivery_failure_count_{0};
+  EspNowCommandCodec command_codec_{};
+  EspNowResultCodec result_codec_{};
+  NetCommand declarative_command_{};
+  PeerIndex declarative_command_peer_{INVALID_PEER_INDEX};
+  TransactionId next_declarative_transaction_id_{1};
+  uint32_t declarative_command_started_ms_{0};
+  uint32_t declarative_command_success_count_{0};
+  uint32_t declarative_command_failure_count_{0};
+  DeclarativeCommandState declarative_command_state_{
+      DeclarativeCommandState::IDLE};
   uint64_t local_boot_id_{0};
   uint32_t ack_sequence_{0};
   RadioTransmissionOwner radio_transmission_owner_{
@@ -93,6 +118,11 @@ class EspNowNetProtocolComponent : public Component {
   void process_application_message_(uint32_t now_ms);
   void process_dispatcher_(uint32_t now_ms);
   void process_owned_sender_completion_();
+  bool inbound_matches_declarative_command_() const;
+  void process_declarative_result_(
+      const EspNowInboundApplicationMessage &inbound, uint32_t now_ms);
+  void fail_declarative_command_(NetErrorCode error, const char *message,
+                                 uint32_t now_ms);
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
 };

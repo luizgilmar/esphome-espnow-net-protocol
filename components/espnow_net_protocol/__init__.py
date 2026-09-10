@@ -83,3 +83,7 @@ async def to_code(config):
     cg.add(var.configure(config[CONF_CHANNEL], config[CONF_PMK]))
     for peer in config[CONF_PEERS]:
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))
+
+
+# Import for native automation action registration side effects.
+from . import actions  # noqa: E402, F401
