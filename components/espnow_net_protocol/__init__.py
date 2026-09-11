@@ -4,7 +4,8 @@ from esphome.components.esp32 import (
     add_idf_sdkconfig_option,
     include_builtin_idf_component,
 )
-from esphome.const import CONF_CHANNEL, CONF_ID
+from esphome import automation
+from esphome.const import CONF_CHANNEL, CONF_ID, CONF_TRIGGER_ID
 
 CODEOWNERS = ["@project-maintainers"]
 CONF_PMK = "pmk"
@@ -13,11 +14,29 @@ CONF_ADDRESS = "address"
 CONF_LMK = "lmk"
 CONF_ACK_TIMEOUT = "ack_timeout"
 CONF_MAX_ATTEMPTS = "max_attempts"
+CONF_INBOUND = "inbound"
+CONF_DEVICE_ID = "device_id"
+CONF_BINDINGS = "bindings"
+CONF_RESOURCE = "resource"
+CONF_COMMAND = "command"
 
 espnow_net_protocol_ns = cg.esphome_ns.namespace("espnow_net_protocol")
 EspNowNetProtocolComponent = espnow_net_protocol_ns.class_(
     "EspNowNetProtocolComponent", cg.Component
 )
+DeclarativeCommandBinding = espnow_net_protocol_ns.class_(
+    "DeclarativeCommandBinding", automation.Trigger.template()
+)
+
+
+def _bounded_text(maximum, label):
+    def validator(value):
+        value = cv.string_strict(value)
+        if not value or len(value) > maximum:
+            raise cv.Invalid(f"{label} must contain 1 to {maximum} characters")
+        return value
+
+    return validator
 
 def _key(value):
     value = cv.string_strict(value)
@@ -40,6 +59,19 @@ PEER_SCHEMA = cv.Schema({
     cv.Required(CONF_LMK): _key,
 })
 
+BINDING_SCHEMA = automation.validate_automation({
+    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(DeclarativeCommandBinding),
+    cv.Required(CONF_RESOURCE): _bounded_text(63, "resource"),
+    cv.Required(CONF_COMMAND): _bounded_text(47, "command"),
+})
+
+INBOUND_SCHEMA = cv.Schema({
+    cv.Required(CONF_DEVICE_ID): _bounded_text(63, "device_id"),
+    cv.Required(CONF_BINDINGS): cv.All(
+        cv.ensure_list(BINDING_SCHEMA), cv.Length(min=1, max=16)
+    ),
+})
+
 def _validate(config):
     ids = set()
     addresses = set()
@@ -52,6 +84,16 @@ def _validate(config):
             raise cv.Invalid(f"duplicate ESP-NOW peer address: {peer[CONF_ADDRESS]}")
         ids.add(peer[CONF_ID])
         addresses.add(peer[CONF_ADDRESS])
+    if CONF_INBOUND in config:
+        routes = set()
+        for binding in config[CONF_INBOUND][CONF_BINDINGS]:
+            route = (binding[CONF_RESOURCE], binding[CONF_COMMAND])
+            if route in routes:
+                raise cv.Invalid(
+                    "duplicate inbound resource/command binding: "
+                    f"{route[0]}/{route[1]}"
+                )
+            routes.add(route)
     return config
 
 CONFIG_SCHEMA = cv.All(
@@ -65,6 +107,7 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_ACK_TIMEOUT, default="250ms"):
             cv.positive_time_period_milliseconds,
         cv.Optional(CONF_MAX_ATTEMPTS, default=3): cv.int_range(min=1, max=8),
+        cv.Optional(CONF_INBOUND): INBOUND_SCHEMA,
     }).extend(cv.COMPONENT_SCHEMA),
     _validate,
 )
@@ -83,6 +126,16 @@ async def to_code(config):
     cg.add(var.configure(config[CONF_CHANNEL], config[CONF_PMK]))
     for peer in config[CONF_PEERS]:
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))
+    if CONF_INBOUND in config:
+        cg.add_define("USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND")
+        inbound = config[CONF_INBOUND]
+        cg.add(var.configure_declarative_inbound(inbound[CONF_DEVICE_ID]))
+        for binding_config in inbound[CONF_BINDINGS]:
+            binding = cg.new_Pvariable(binding_config[CONF_TRIGGER_ID])
+            cg.add(binding.set_resource(binding_config[CONF_RESOURCE]))
+            cg.add(binding.set_command(binding_config[CONF_COMMAND]))
+            cg.add(var.add_declarative_binding(binding))
+            await automation.build_automation(binding, [], binding_config)
 
 
 # Import for native automation action registration side effects.

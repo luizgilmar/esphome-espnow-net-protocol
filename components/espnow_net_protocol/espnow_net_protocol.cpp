@@ -302,6 +302,11 @@ void EspNowNetProtocolComponent::dump_config() {
                 static_cast<unsigned>(declarative_command_state_),
                 static_cast<unsigned>(declarative_command_success_count_),
                 static_cast<unsigned>(declarative_command_failure_count_));
+#ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
+  ESP_LOGCONFIG(TAG, "Declarative inbound bindings=%u",
+                static_cast<unsigned>(
+                    declarative_command_handler_.binding_count()));
+#endif
 }
 
 }  // namespace espnow_net_protocol

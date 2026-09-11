@@ -3,6 +3,9 @@
 #include "esphome/core/component.h"
 #include "command_dispatcher.h"
 #include "command_codec.h"
+#ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
+#include "declarative_command_handler.h"
+#endif
 #include "espidf_espnow_encrypted_radio.h"
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
@@ -67,6 +70,15 @@ class EspNowNetProtocolComponent : public Component {
   void set_command_handler(NetCommandHandler *handler) {
     command_dispatcher_.set_handler(handler);
   }
+#ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
+  void configure_declarative_inbound(const char *device_id) {
+    declarative_command_handler_.set_device_id(device_id);
+    command_dispatcher_.set_handler(&declarative_command_handler_);
+  }
+  bool add_declarative_binding(DeclarativeCommandBinding *binding) {
+    return declarative_command_handler_.add_binding(binding);
+  }
+#endif
   bool send_command(const char *peer_id, const char *device_id,
                     const char *resource, const char *command,
                     const char *payload, uint32_t timeout_ms,
@@ -91,6 +103,9 @@ class EspNowNetProtocolComponent : public Component {
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
   InboundCommandDispatcher command_dispatcher_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
+  DeclarativeCommandHandler declarative_command_handler_{};
+#endif
   EspNowRetryPolicy retry_policy_{};
   EspNowInboundApplicationMessage result_message_{};
   bool result_message_ready_{false};
