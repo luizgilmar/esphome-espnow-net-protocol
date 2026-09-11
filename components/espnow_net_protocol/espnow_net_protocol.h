@@ -140,6 +140,9 @@ class EspNowNetProtocolComponent : public Component {
   NetCommand command_client_command_{};
   PeerIndex command_client_peer_{INVALID_PEER_INDEX};
   NetCommandResultObserver *command_result_observer_{nullptr};
+  NetResult command_result_notification_{};
+  PeerIndex command_result_notification_peer_{INVALID_PEER_INDEX};
+  bool command_result_notification_ready_{false};
   TransactionId next_declarative_transaction_id_{1};
   uint32_t command_client_started_ms_{0};
   uint32_t command_client_progress_count_{0};
@@ -168,6 +171,9 @@ class EspNowNetProtocolComponent : public Component {
                             uint32_t now_ms);
   void finish_command_client_(const NetResult &result);
   void clear_command_client_();
+  void queue_command_result_notification_(PeerIndex peer,
+                                          const NetResult &result);
+  void dispatch_command_result_notification_();
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
 };

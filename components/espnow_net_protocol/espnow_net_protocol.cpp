@@ -90,6 +90,9 @@ void EspNowNetProtocolComponent::loop() {
   const uint32_t now_ms = millis();
   radio_.loop(now_ms);
   if (!radio_.initialized() || is_failed()) return;
+  // Notify integrations only after the protocol call chain that produced the
+  // result has unwound. This bounds main-task stack use during radio failures.
+  dispatch_command_result_notification_();
   process_send_completion_(now_ms);
   process_received_frame_();
   process_application_message_(now_ms);
@@ -116,7 +119,9 @@ void EspNowNetProtocolComponent::process_application_message_(
   if ((kind == EspNowFrameKind::COMMAND &&
        command_dispatcher_.state() != InboundCommandDispatcherState::IDLE) ||
       (kind == EspNowFrameKind::RESULT && result_message_ready_ &&
-       !command_client_result && !late_terminal))
+       !command_client_result && !late_terminal) ||
+      (kind == EspNowFrameKind::RESULT && command_client_result &&
+       command_result_notification_ready_))
     return;
   EspNowInboundApplicationMessage inbound{};
   if (!runtime_.take_application_message(inbound)) return;
@@ -234,9 +239,7 @@ void EspNowNetProtocolComponent::process_command_client_result_(
            static_cast<unsigned>(result.error.code));
   if (result.status == NetResultStatus::IN_PROGRESS) {
     command_client_progress_count_++;
-    if (command_result_observer_ != nullptr)
-      command_result_observer_->on_net_command_result(command_client_peer_,
-                                                       result);
+    queue_command_result_notification_(command_client_peer_, result);
     return;
   }
   if (result.status == NetResultStatus::SUCCEEDED)
@@ -273,8 +276,7 @@ void EspNowNetProtocolComponent::finish_command_client_(
   last_terminal_peer_ = peer;
   last_terminal_transaction_id_ = result.transaction_id;
   clear_command_client_();
-  if (command_result_observer_ != nullptr)
-    command_result_observer_->on_net_command_result(peer, result);
+  queue_command_result_notification_(peer, result);
 }
 
 void EspNowNetProtocolComponent::clear_command_client_() {
@@ -282,6 +284,26 @@ void EspNowNetProtocolComponent::clear_command_client_() {
   command_client_peer_ = INVALID_PEER_INDEX;
   command_client_started_ms_ = 0;
   command_client_state_ = CommandClientState::IDLE;
+}
+
+void EspNowNetProtocolComponent::queue_command_result_notification_(
+    PeerIndex peer, const NetResult &result) {
+  if (command_result_observer_ == nullptr ||
+      command_result_notification_ready_)
+    return;
+  command_result_notification_ = result;
+  command_result_notification_peer_ = peer;
+  command_result_notification_ready_ = true;
+}
+
+void EspNowNetProtocolComponent::dispatch_command_result_notification_() {
+  if (!command_result_notification_ready_) return;
+  command_result_notification_ready_ = false;
+  if (command_result_observer_ != nullptr)
+    command_result_observer_->on_net_command_result(
+        command_result_notification_peer_, command_result_notification_);
+  command_result_notification_ = {};
+  command_result_notification_peer_ = INVALID_PEER_INDEX;
 }
 
 void EspNowNetProtocolComponent::process_send_completion_(uint32_t now_ms) {

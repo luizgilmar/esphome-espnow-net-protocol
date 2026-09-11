@@ -32,7 +32,8 @@ def test_progress_is_observed_without_closing_the_transaction() -> None:
     branch = source[source.index("if (result.status == NetResultStatus::IN_PROGRESS)") :]
     branch = branch[:branch.index("finish_command_client_(result);")]
     assert "command_client_progress_count_++" in branch
-    assert "on_net_command_result" in branch
+    assert "queue_command_result_notification_" in branch
+    assert "on_net_command_result" not in branch
     assert "command_client_state_ = CommandClientState::IDLE" not in branch
 
 
@@ -42,11 +43,12 @@ def test_every_terminal_path_notifies_then_releases_the_generic_client() -> None
     assert "void fail_command_client_" in header
     assert "void finish_command_client_" in header
     finish = source[source.index("void EspNowNetProtocolComponent::finish_command_client_") :]
-    finish = finish[:finish.index("void EspNowNetProtocolComponent::process_send_completion_")]
+    finish = finish[:finish.index("void EspNowNetProtocolComponent::clear_command_client_")]
     assert "last_terminal_transaction_id_ = result.transaction_id" in finish
     assert "clear_command_client_();" in finish
     assert "command_client_state_ = CommandClientState::IDLE" in source
-    assert "on_net_command_result(peer, result)" in finish
+    assert "queue_command_result_notification_(peer, result)" in finish
+    assert "on_net_command_result" not in finish
 
 
 def test_timeout_and_delivery_failures_are_terminal_result_events() -> None:
