@@ -3,13 +3,35 @@
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
 
+#include <esp_heap_caps.h>
 #include <esp_random.h>
 #include <cstring>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 namespace esphome {
 namespace espnow_net_protocol {
 
 static const char *const TAG = "espnow_net_protocol";
+
+static void log_runtime_health_(const char *phase,
+                                const EspIdfEspNowEncryptedRadio &radio) {
+  const bool heap_ok = heap_caps_check_integrity_all(false);
+  ESP_LOGW(TAG,
+           "Runtime health phase=%s stack_free_words=%u heap_free=%u "
+           "heap_min=%u heap_ok=%s rx_queue=%u completion_queue=%u "
+           "dropped_rx=%u dropped_completion=%u",
+           phase,
+           static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(
+               heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)),
+           YESNO(heap_ok), static_cast<unsigned>(radio.received_queue_depth()),
+           static_cast<unsigned>(radio.completion_queue_depth()),
+           static_cast<unsigned>(radio.dropped_frame_count()),
+           static_cast<unsigned>(radio.dropped_completion_count()));
+}
 
 bool EspNowNetProtocolComponent::send_command(
     const char *peer_id, const char *device_id, const char *resource,
@@ -58,6 +80,7 @@ bool EspNowNetProtocolComponent::start_command(
   command_client_started_ms_ = now_ms;
   command_client_state_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
   reliable_message_owner_ = ReliableMessageOwner::COMMAND_CLIENT;
+  log_runtime_health_("command_started", radio_);
   return true;
 }
 
@@ -251,6 +274,9 @@ void EspNowNetProtocolComponent::process_command_client_result_(
 
 void EspNowNetProtocolComponent::fail_command_client_(
     NetErrorCode error, const char *message, uint32_t now_ms) {
+  log_runtime_health_(error == NetErrorCode::TIMED_OUT ? "before_timeout_failure"
+                                                       : "before_command_failure",
+                      radio_);
   command_client_failure_count_++;
   NetResult result{};
   result.transaction_id = command_client_command_.transaction_id;

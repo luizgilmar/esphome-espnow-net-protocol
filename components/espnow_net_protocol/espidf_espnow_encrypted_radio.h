@@ -60,6 +60,8 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t dropped_completion_count() const {
     return dropped_completion_count_.load(std::memory_order_relaxed);
   }
+  size_t received_queue_depth() const { return received_frames_.size(); }
+  size_t completion_queue_depth() const { return send_completions_.size(); }
 
   const EspNowEncryptedPeer *find_peer(const char *destination_id) const;
   const EspNowEncryptedPeer *peer(PeerIndex peer_index) const {
