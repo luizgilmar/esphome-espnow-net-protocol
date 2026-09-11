@@ -53,6 +53,11 @@ Device integrations register a `NetCommandResultObserver`; they do not need to
 reimplement the ESP-NOW transaction state machine. The declarative action above
 uses this same command client.
 
+The terminal failure carries whether remote execution may have started. This
+lets a transport orchestrator fall back after a delivery failure while avoiding
+duplicate execution after an accepted command. Integrations can cancel their
+active transaction explicitly; a late result from it is discarded.
+
 At startup, the radio waits until the configured Wi-Fi channel remains stable
 for five seconds before initializing ESP-NOW. Failed initialization attempts
 are rate-limited and report the underlying ESP-IDF error.

@@ -44,7 +44,8 @@ def test_every_terminal_path_notifies_then_releases_the_generic_client() -> None
     finish = source[source.index("void EspNowNetProtocolComponent::finish_command_client_") :]
     finish = finish[:finish.index("void EspNowNetProtocolComponent::process_send_completion_")]
     assert "last_terminal_transaction_id_ = result.transaction_id" in finish
-    assert "command_client_state_ = CommandClientState::IDLE" in finish
+    assert "clear_command_client_();" in finish
+    assert "command_client_state_ = CommandClientState::IDLE" in source
     assert "on_net_command_result(peer, result)" in finish
 
 
@@ -65,4 +66,25 @@ def test_most_recent_late_terminal_is_consumed_without_raw_mailbox_pollution() -
     assert "last_terminal_peer_" in header
     assert "last_terminal_transaction_id_" in header
     assert "inbound_matches_last_terminal_" in source
-    assert "Late terminal result ignored" in source
+    assert "Late command result discarded" in source
+
+
+def test_cancel_releases_sender_and_quarantines_late_result() -> None:
+    header = read("espnow_net_protocol.h")
+    source = read("espnow_net_protocol.cpp")
+    assert "bool cancel_command(TransactionId transaction_id);" in header
+    cancel = source[source.index("bool EspNowNetProtocolComponent::cancel_command(") :]
+    cancel = cancel[:cancel.index("void EspNowNetProtocolComponent::setup()")]
+    assert "command_client_command_.transaction_id != transaction_id" in cancel
+    assert "sender_.reset();" in cancel
+    assert "last_terminal_transaction_id_ = transaction_id" in cancel
+    assert "clear_command_client_();" in cancel
+
+
+def test_failure_reports_whether_remote_execution_may_have_started() -> None:
+    source = read("espnow_net_protocol.cpp")
+    failure = source[source.index("void EspNowNetProtocolComponent::fail_command_client_") :]
+    failure = failure[:failure.index("void EspNowNetProtocolComponent::finish_command_client_")]
+    assert "result.execution.started" in failure
+    assert "CommandClientState::WAITING_FOR_RESULT" in failure
+    assert "result.error.message.assign(message)" in failure

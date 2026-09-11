@@ -96,6 +96,7 @@ class EspNowNetProtocolComponent : public Component {
                     uint32_t now_ms);
   bool start_command(PeerIndex peer, const NetCommand &command,
                      uint32_t now_ms);
+  bool cancel_command(TransactionId transaction_id);
   void set_command_result_observer(NetCommandResultObserver *observer) {
     command_result_observer_ = observer;
   }
@@ -103,9 +104,7 @@ class EspNowNetProtocolComponent : public Component {
     return command_client_state_;
   }
   TransactionId active_command_transaction_id() const {
-    return command_client_state_ == CommandClientState::IDLE
-               ? 0
-               : command_client_command_.transaction_id;
+    return command_client_command_.transaction_id;
   }
   DeclarativeCommandState declarative_command_state() const {
     return command_client_state_;
@@ -146,6 +145,7 @@ class EspNowNetProtocolComponent : public Component {
   uint32_t command_client_progress_count_{0};
   uint32_t command_client_success_count_{0};
   uint32_t command_client_failure_count_{0};
+  uint32_t command_client_cancel_count_{0};
   CommandClientState command_client_state_{CommandClientState::IDLE};
   PeerIndex last_terminal_peer_{INVALID_PEER_INDEX};
   TransactionId last_terminal_transaction_id_{0};
@@ -167,6 +167,7 @@ class EspNowNetProtocolComponent : public Component {
   void fail_command_client_(NetErrorCode error, const char *message,
                             uint32_t now_ms);
   void finish_command_client_(const NetResult &result);
+  void clear_command_client_();
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
 };

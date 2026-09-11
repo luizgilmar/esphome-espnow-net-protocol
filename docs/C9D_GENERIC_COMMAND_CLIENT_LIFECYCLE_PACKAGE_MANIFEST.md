@@ -18,3 +18,6 @@
 This package changes only `esphome-espnow-net-protocol`. The TX adapter
 migration follows after this generic API compiles and passes hardware
 validation.
+
+The client also exposes correlated cancellation and distinguishes pre-delivery
+failure from post-acceptance uncertainty through `NetResult.execution.started`.

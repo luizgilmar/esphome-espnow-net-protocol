@@ -13,6 +13,12 @@ The lifecycle separates radio delivery from functional execution:
 5. delivery rejection, delivery timeout, invalid result and functional timeout
    are emitted as terminal `FAILED` results through the same observer.
 
+Failures before the delivery ACK report `execution.started: false`, allowing a
+consumer to select another transport safely. Failures after the ACK report
+`execution.started: true`, because the remote command may already have changed
+state and must not be repeated blindly. `cancel_command(transaction_id)`
+releases the bounded client and quarantines a late result from that transaction.
+
 The protocol retains no dynamic collection. A direct observer callback provides
 result delivery without allocating a result queue. The most recent completed
 transaction is retained only as peer/transaction identifiers so a late
