@@ -46,6 +46,13 @@ Any ESP32 consumer can originate a reliable command declaratively:
     timeout: 5s
 ```
 
+Outbound commands use one component-owned lifecycle. Delivery acknowledgement,
+correlation, any number of `IN_PROGRESS` notifications, the single terminal
+result and the end-to-end timeout are handled by `espnow_net_protocol`.
+Device integrations register a `NetCommandResultObserver`; they do not need to
+reimplement the ESP-NOW transaction state machine. The declarative action above
+uses this same command client.
+
 At startup, the radio waits until the configured Wi-Fi channel remains stable
 for five seconds before initializing ESP-NOW. Failed initialization attempts
 are rate-limited and report the underlying ESP-IDF error.

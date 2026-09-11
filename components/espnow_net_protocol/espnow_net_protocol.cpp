@@ -15,9 +15,7 @@ bool EspNowNetProtocolComponent::send_command(
     const char *peer_id, const char *device_id, const char *resource,
     const char *command, const char *payload, uint32_t timeout_ms,
     uint32_t now_ms) {
-  if (declarative_command_state_ != DeclarativeCommandState::IDLE ||
-      reliable_message_owner_ != ReliableMessageOwner::NONE ||
-      sender_.state() != ReliableSenderState::IDLE || peer_id == nullptr ||
+  if (peer_id == nullptr ||
       device_id == nullptr || resource == nullptr || command == nullptr ||
       payload == nullptr || timeout_ms == 0)
     return false;
@@ -36,20 +34,31 @@ bool EspNowNetProtocolComponent::send_command(
                               std::strlen(payload)) ||
       !request.valid())
     return false;
-  EspNowCommandPayload encoded{};
-  if (!command_codec_.encode(request, encoded) ||
-      !sender_.start(peer, EspNowFrameKind::COMMAND, request.transaction_id,
-                     encoded.data.data(), encoded.data.size()))
-    return false;
-  declarative_command_ = request;
-  declarative_command_peer_ = peer;
-  declarative_command_started_ms_ = now_ms;
-  declarative_command_state_ =
-      DeclarativeCommandState::WAITING_FOR_DELIVERY_ACK;
-  reliable_message_owner_ = ReliableMessageOwner::DECLARATIVE_COMMAND;
+  if (!start_command(peer, request, now_ms)) return false;
   ESP_LOGI(TAG, "Command started peer=%s device=%s resource=%s command=%s tx=%llu",
            peer_id, device_id, resource, command,
            static_cast<unsigned long long>(request.transaction_id));
+  return true;
+}
+
+bool EspNowNetProtocolComponent::start_command(
+    PeerIndex peer, const NetCommand &command, uint32_t now_ms) {
+  if (command_client_state_ != CommandClientState::IDLE ||
+      reliable_message_owner_ != ReliableMessageOwner::NONE ||
+      sender_.state() != ReliableSenderState::IDLE ||
+      peer == INVALID_PEER_INDEX || peer >= radio_.peer_count() ||
+      !command.valid())
+    return false;
+  EspNowCommandPayload encoded{};
+  if (!command_codec_.encode(command, encoded) ||
+      !sender_.start(peer, EspNowFrameKind::COMMAND, command.transaction_id,
+                     encoded.data.data(), encoded.data.size()))
+    return false;
+  command_client_command_ = command;
+  command_client_peer_ = peer;
+  command_client_started_ms_ = now_ms;
+  command_client_state_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
+  reliable_message_owner_ = ReliableMessageOwner::COMMAND_CLIENT;
   return true;
 }
 
@@ -70,12 +79,10 @@ void EspNowNetProtocolComponent::loop() {
   process_send_completion_(now_ms);
   process_received_frame_();
   process_application_message_(now_ms);
-  if (declarative_command_state_ ==
-          DeclarativeCommandState::WAITING_FOR_RESULT &&
-      now_ms - declarative_command_started_ms_ >=
-          declarative_command_.timeout_ms)
-    fail_declarative_command_(NetErrorCode::TIMED_OUT,
-                              "functional result timed out", now_ms);
+  if (command_client_state_ == CommandClientState::WAITING_FOR_RESULT &&
+      now_ms - command_client_started_ms_ >= command_client_command_.timeout_ms)
+    fail_command_client_(NetErrorCode::TIMED_OUT,
+                         "functional result timed out", now_ms);
   command_dispatcher_.loop(now_ms);
   sender_.loop(now_ms);
   process_owned_sender_completion_();
@@ -88,13 +95,14 @@ void EspNowNetProtocolComponent::process_application_message_(
     uint32_t now_ms) {
   if (!runtime_.application_message_ready()) return;
   const EspNowFrameKind kind = runtime_.application_message_kind();
-  const bool declarative_result = inbound_matches_declarative_command_();
+  const bool command_client_result = inbound_matches_command_client_();
+  const bool late_terminal = inbound_matches_last_terminal_();
   // Keep the reassembler-owned payload in place until its bounded consumer is
   // ready. This prevents an ACCEPTED delivery ACK followed by a local drop.
   if ((kind == EspNowFrameKind::COMMAND &&
        command_dispatcher_.state() != InboundCommandDispatcherState::IDLE) ||
       (kind == EspNowFrameKind::RESULT && result_message_ready_ &&
-       !declarative_result))
+       !command_client_result && !late_terminal))
     return;
   EspNowInboundApplicationMessage inbound{};
   if (!runtime_.take_application_message(inbound)) return;
@@ -107,8 +115,14 @@ void EspNowNetProtocolComponent::process_application_message_(
     return;
   }
   if (inbound.message.envelope.kind == EspNowFrameKind::RESULT) {
-    if (declarative_result) {
-      process_declarative_result_(inbound, now_ms);
+    if (command_client_result) {
+      process_command_client_result_(inbound, now_ms);
+      return;
+    }
+    if (late_terminal) {
+      ESP_LOGD(TAG, "Late terminal result ignored tx=%llu",
+               static_cast<unsigned long long>(
+                   inbound.message.envelope.transaction_id));
       return;
     }
     result_message_ = inbound;
@@ -139,22 +153,21 @@ void EspNowNetProtocolComponent::process_dispatcher_(uint32_t now_ms) {
 }
 
 void EspNowNetProtocolComponent::process_owned_sender_completion_() {
-  if (reliable_message_owner_ == ReliableMessageOwner::DECLARATIVE_COMMAND) {
+  if (reliable_message_owner_ == ReliableMessageOwner::COMMAND_CLIENT) {
     if (sender_.state() == ReliableSenderState::ACKNOWLEDGED) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
-      declarative_command_state_ = DeclarativeCommandState::WAITING_FOR_RESULT;
+      command_client_state_ = CommandClientState::WAITING_FOR_RESULT;
     } else if (sender_.state() == ReliableSenderState::REJECTED) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
-      fail_declarative_command_(NetErrorCode::REMOTE_REJECTED,
-                                "delivery rejected", millis());
+      fail_command_client_(NetErrorCode::REMOTE_REJECTED,
+                           "delivery rejected", millis());
     } else if (sender_.state() == ReliableSenderState::TIMED_OUT) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
-      fail_declarative_command_(NetErrorCode::TIMED_OUT,
-                                "delivery acknowledgement timed out",
-                                millis());
+      fail_command_client_(NetErrorCode::TIMED_OUT,
+                           "delivery acknowledgement timed out", millis());
     }
     return;
   }
@@ -172,24 +185,31 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
   }
 }
 
-bool EspNowNetProtocolComponent::inbound_matches_declarative_command_() const {
-  return declarative_command_state_ ==
-             DeclarativeCommandState::WAITING_FOR_RESULT &&
+bool EspNowNetProtocolComponent::inbound_matches_command_client_() const {
+  return command_client_state_ == CommandClientState::WAITING_FOR_RESULT &&
          runtime_.application_message_kind() == EspNowFrameKind::RESULT &&
-         runtime_.application_message_peer_index() == declarative_command_peer_ &&
+         runtime_.application_message_peer_index() == command_client_peer_ &&
          runtime_.application_message_transaction_id() ==
-             declarative_command_.transaction_id;
+             command_client_command_.transaction_id;
 }
 
-void EspNowNetProtocolComponent::process_declarative_result_(
+bool EspNowNetProtocolComponent::inbound_matches_last_terminal_() const {
+  return last_terminal_transaction_id_ != 0 &&
+         runtime_.application_message_kind() == EspNowFrameKind::RESULT &&
+         runtime_.application_message_peer_index() == last_terminal_peer_ &&
+         runtime_.application_message_transaction_id() ==
+             last_terminal_transaction_id_;
+}
+
+void EspNowNetProtocolComponent::process_command_client_result_(
     const EspNowInboundApplicationMessage &inbound, uint32_t now_ms) {
   NetResult result{};
   if (!result_codec_.decode(
-          declarative_command_.transaction_id, inbound.message.data.data(),
+          command_client_command_.transaction_id, inbound.message.data.data(),
           inbound.message.data.size(),
-          now_ms - declarative_command_started_ms_, result)) {
-    fail_declarative_command_(NetErrorCode::PROTOCOL_ERROR,
-                              "invalid functional result", now_ms);
+          now_ms - command_client_started_ms_, result)) {
+    fail_command_client_(NetErrorCode::PROTOCOL_ERROR,
+                         "invalid functional result", now_ms);
     return;
   }
   ESP_LOGI(TAG, "Command result tx=%llu status=%u latency=%u error=%u",
@@ -197,27 +217,47 @@ void EspNowNetProtocolComponent::process_declarative_result_(
            static_cast<unsigned>(result.status),
            static_cast<unsigned>(result.latency_ms),
            static_cast<unsigned>(result.error.code));
-  if (result.status == NetResultStatus::IN_PROGRESS) return;
-  if (result.status == NetResultStatus::SUCCEEDED)
-    declarative_command_success_count_++;
-  else
-    declarative_command_failure_count_++;
-  declarative_command_ = {};
-  declarative_command_peer_ = INVALID_PEER_INDEX;
-  declarative_command_state_ = DeclarativeCommandState::IDLE;
+  if (result.status == NetResultStatus::IN_PROGRESS) {
+    command_client_progress_count_++;
+    if (command_result_observer_ != nullptr)
+      command_result_observer_->on_net_command_result(command_client_peer_,
+                                                      result);
+    return;
+  }
+  finish_command_client_(result);
 }
 
-void EspNowNetProtocolComponent::fail_declarative_command_(
+void EspNowNetProtocolComponent::fail_command_client_(
     NetErrorCode error, const char *message, uint32_t now_ms) {
-  declarative_command_failure_count_++;
+  NetResult result{};
+  result.transaction_id = command_client_command_.transaction_id;
+  result.status = NetResultStatus::FAILED;
+  result.error.code = error;
+  result.error.retryable = error == NetErrorCode::TIMED_OUT;
+  result.error.message.assign(message);
+  result.latency_ms = now_ms - command_client_started_ms_;
   ESP_LOGW(TAG, "Command failed tx=%llu latency=%u error=%u reason=%s",
-           static_cast<unsigned long long>(
-               declarative_command_.transaction_id),
-           static_cast<unsigned>(now_ms - declarative_command_started_ms_),
+           static_cast<unsigned long long>(result.transaction_id),
+           static_cast<unsigned>(result.latency_ms),
            static_cast<unsigned>(error), message);
-  declarative_command_ = {};
-  declarative_command_peer_ = INVALID_PEER_INDEX;
-  declarative_command_state_ = DeclarativeCommandState::IDLE;
+  finish_command_client_(result);
+}
+
+void EspNowNetProtocolComponent::finish_command_client_(
+    const NetResult &result) {
+  const PeerIndex peer = command_client_peer_;
+  last_terminal_peer_ = peer;
+  last_terminal_transaction_id_ = result.transaction_id;
+  if (result.status == NetResultStatus::SUCCEEDED)
+    command_client_success_count_++;
+  else
+    command_client_failure_count_++;
+  command_client_command_ = {};
+  command_client_peer_ = INVALID_PEER_INDEX;
+  command_client_started_ms_ = 0;
+  command_client_state_ = CommandClientState::IDLE;
+  if (command_result_observer_ != nullptr)
+    command_result_observer_->on_net_command_result(peer, result);
 }
 
 void EspNowNetProtocolComponent::process_send_completion_(uint32_t now_ms) {
@@ -287,7 +327,7 @@ void EspNowNetProtocolComponent::dump_config() {
                 "ESP-NOW NetProtocol: %s channel=%u current=%u peers=%u "
                 "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
                 "result_ok=%u result_failed=%u command_state=%u "
-                "command_ok=%u command_failed=%u",
+                "command_progress=%u command_ok=%u command_failed=%u",
                 radio_.initialized() ? "READY" : "WAITING",
                 static_cast<unsigned>(radio_.expected_channel()),
                 static_cast<unsigned>(radio_.current_channel()),
@@ -299,9 +339,10 @@ void EspNowNetProtocolComponent::dump_config() {
                 static_cast<unsigned>(radio_.failed_send_count()),
                 static_cast<unsigned>(result_delivery_success_count_),
                 static_cast<unsigned>(result_delivery_failure_count_),
-                static_cast<unsigned>(declarative_command_state_),
-                static_cast<unsigned>(declarative_command_success_count_),
-                static_cast<unsigned>(declarative_command_failure_count_));
+                static_cast<unsigned>(command_client_state_),
+                static_cast<unsigned>(command_client_progress_count_),
+                static_cast<unsigned>(command_client_success_count_),
+                static_cast<unsigned>(command_client_failure_count_));
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
   ESP_LOGCONFIG(TAG, "Declarative inbound bindings=%u",
                 static_cast<unsigned>(

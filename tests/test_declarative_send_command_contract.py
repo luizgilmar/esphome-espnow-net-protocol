@@ -23,11 +23,11 @@ def test_native_yaml_action_is_registered_without_lambda() -> None:
 def test_endpoint_owns_bounded_declarative_command_lifecycle() -> None:
     header = read("espnow_net_protocol.h")
     source = read("espnow_net_protocol.cpp")
-    assert "enum class DeclarativeCommandState" in header
-    assert "NetCommand declarative_command_{}" in header
+    assert "enum class CommandClientState" in header
+    assert "NetCommand command_client_command_{}" in header
     assert "std::vector" not in header
     assert "std::queue" not in header
-    assert "ReliableMessageOwner::DECLARATIVE_COMMAND" in source
+    assert "ReliableMessageOwner::COMMAND_CLIENT" in source
     assert "WAITING_FOR_DELIVERY_ACK" in source
     assert "WAITING_FOR_RESULT" in source
     assert "functional result timed out" in source
@@ -38,6 +38,6 @@ def test_functional_result_is_correlated_separately_from_delivery_ack() -> None:
     source = read("espnow_net_protocol.cpp")
     assert "application_message_transaction_id() const" in runtime
     assert "application_message_peer_index() const" in runtime
-    assert "inbound_matches_declarative_command_" in source
+    assert "inbound_matches_command_client_" in source
     assert "result_codec_.decode" in source
     assert "Command result tx=%llu" in source

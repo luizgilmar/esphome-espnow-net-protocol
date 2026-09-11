@@ -17,13 +17,21 @@
 namespace esphome {
 namespace espnow_net_protocol {
 
+class NetCommandResultObserver {
+ public:
+  virtual ~NetCommandResultObserver() = default;
+  virtual void on_net_command_result(PeerIndex peer,
+                                     const NetResult &result) = 0;
+};
+
 class EspNowNetProtocolComponent : public Component {
  public:
-  enum class DeclarativeCommandState : uint8_t {
+  enum class CommandClientState : uint8_t {
     IDLE,
     WAITING_FOR_DELIVERY_ACK,
     WAITING_FOR_RESULT,
   };
+  using DeclarativeCommandState = CommandClientState;
   bool configure(uint8_t channel, const char *pmk_hex) {
     return radio_.configure(channel, pmk_hex);
   }
@@ -86,8 +94,21 @@ class EspNowNetProtocolComponent : public Component {
                     const char *resource, const char *command,
                     const char *payload, uint32_t timeout_ms,
                     uint32_t now_ms);
+  bool start_command(PeerIndex peer, const NetCommand &command,
+                     uint32_t now_ms);
+  void set_command_result_observer(NetCommandResultObserver *observer) {
+    command_result_observer_ = observer;
+  }
+  CommandClientState command_client_state() const {
+    return command_client_state_;
+  }
+  TransactionId active_command_transaction_id() const {
+    return command_client_state_ == CommandClientState::IDLE
+               ? 0
+               : command_client_command_.transaction_id;
+  }
   DeclarativeCommandState declarative_command_state() const {
-    return declarative_command_state_;
+    return command_client_state_;
   }
 
   void setup() override;
@@ -100,7 +121,7 @@ class EspNowNetProtocolComponent : public Component {
     NONE,
     API_CALLER,
     DISPATCHER_RESULT,
-    DECLARATIVE_COMMAND,
+    COMMAND_CLIENT,
   };
   EspIdfEspNowEncryptedRadio radio_{};
   EspNowProtocolRuntime runtime_{};
@@ -117,14 +138,17 @@ class EspNowNetProtocolComponent : public Component {
   uint32_t result_delivery_failure_count_{0};
   EspNowCommandCodec command_codec_{};
   EspNowResultCodec result_codec_{};
-  NetCommand declarative_command_{};
-  PeerIndex declarative_command_peer_{INVALID_PEER_INDEX};
+  NetCommand command_client_command_{};
+  PeerIndex command_client_peer_{INVALID_PEER_INDEX};
+  NetCommandResultObserver *command_result_observer_{nullptr};
   TransactionId next_declarative_transaction_id_{1};
-  uint32_t declarative_command_started_ms_{0};
-  uint32_t declarative_command_success_count_{0};
-  uint32_t declarative_command_failure_count_{0};
-  DeclarativeCommandState declarative_command_state_{
-      DeclarativeCommandState::IDLE};
+  uint32_t command_client_started_ms_{0};
+  uint32_t command_client_progress_count_{0};
+  uint32_t command_client_success_count_{0};
+  uint32_t command_client_failure_count_{0};
+  CommandClientState command_client_state_{CommandClientState::IDLE};
+  PeerIndex last_terminal_peer_{INVALID_PEER_INDEX};
+  TransactionId last_terminal_transaction_id_{0};
   uint64_t local_boot_id_{0};
   uint32_t ack_sequence_{0};
   RadioTransmissionOwner radio_transmission_owner_{
@@ -136,11 +160,13 @@ class EspNowNetProtocolComponent : public Component {
   void process_application_message_(uint32_t now_ms);
   void process_dispatcher_(uint32_t now_ms);
   void process_owned_sender_completion_();
-  bool inbound_matches_declarative_command_() const;
-  void process_declarative_result_(
+  bool inbound_matches_command_client_() const;
+  bool inbound_matches_last_terminal_() const;
+  void process_command_client_result_(
       const EspNowInboundApplicationMessage &inbound, uint32_t now_ms);
-  void fail_declarative_command_(NetErrorCode error, const char *message,
-                                 uint32_t now_ms);
+  void fail_command_client_(NetErrorCode error, const char *message,
+                            uint32_t now_ms);
+  void finish_command_client_(const NetResult &result);
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
 };
