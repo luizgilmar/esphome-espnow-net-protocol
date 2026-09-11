@@ -5,7 +5,14 @@ from esphome.components.esp32 import (
     include_builtin_idf_component,
 )
 from esphome import automation
-from esphome.const import CONF_CHANNEL, CONF_ID, CONF_TRIGGER_ID
+from esphome.components import light
+from esphome.const import (
+    CONF_CHANNEL,
+    CONF_ID,
+    CONF_LIGHT_ID,
+    CONF_TIMEOUT,
+    CONF_TRIGGER_ID,
+)
 
 CODEOWNERS = ["@project-maintainers"]
 CONF_PMK = "pmk"
@@ -19,6 +26,8 @@ CONF_DEVICE_ID = "device_id"
 CONF_BINDINGS = "bindings"
 CONF_RESOURCE = "resource"
 CONF_COMMAND = "command"
+CONF_COMPLETION = "completion"
+CONF_EXPECTED = "expected"
 
 espnow_net_protocol_ns = cg.esphome_ns.namespace("espnow_net_protocol")
 EspNowNetProtocolComponent = espnow_net_protocol_ns.class_(
@@ -27,6 +36,18 @@ EspNowNetProtocolComponent = espnow_net_protocol_ns.class_(
 DeclarativeCommandBinding = espnow_net_protocol_ns.class_(
     "DeclarativeCommandBinding", automation.Trigger.template()
 )
+LightCommandCompletionProbe = espnow_net_protocol_ns.class_(
+    "LightCommandCompletionProbe"
+)
+LightExpectedState = espnow_net_protocol_ns.enum(
+    "LightExpectedState", is_class=True
+)
+
+LIGHT_EXPECTED_STATES = {
+    "on": LightExpectedState.ON,
+    "off": LightExpectedState.OFF,
+    "toggled": LightExpectedState.TOGGLED,
+}
 
 
 def _bounded_text(maximum, label):
@@ -59,6 +80,18 @@ PEER_SCHEMA = cv.Schema({
     cv.Required(CONF_LMK): _key,
 })
 
+LIGHT_COMPLETION_SCHEMA = cv.Schema(
+    {
+        cv.GenerateID(): cv.declare_id(LightCommandCompletionProbe),
+        cv.Required(CONF_LIGHT_ID): cv.use_id(light.LightState),
+        cv.Optional(CONF_EXPECTED, default="toggled"): cv.enum(
+            LIGHT_EXPECTED_STATES, lower=True
+        ),
+        cv.Optional(CONF_TIMEOUT, default="2s"):
+            cv.positive_time_period_milliseconds,
+    }
+)
+
 BINDING_SCHEMA = automation.validate_automation(
     {
         cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
@@ -66,6 +99,7 @@ BINDING_SCHEMA = automation.validate_automation(
         ),
         cv.Required(CONF_RESOURCE): _bounded_text(63, "resource"),
         cv.Required(CONF_COMMAND): _bounded_text(47, "command"),
+        cv.Optional(CONF_COMPLETION): LIGHT_COMPLETION_SCHEMA,
     },
     single=True,
 )
@@ -139,6 +173,27 @@ async def to_code(config):
             binding = cg.new_Pvariable(binding_config[CONF_TRIGGER_ID])
             cg.add(binding.set_resource(binding_config[CONF_RESOURCE]))
             cg.add(binding.set_command(binding_config[CONF_COMMAND]))
+            if CONF_COMPLETION in binding_config:
+                cg.add_define(
+                    "USE_ESPNOW_NET_PROTOCOL_LIGHT_COMPLETION"
+                )
+                completion_config = binding_config[CONF_COMPLETION]
+                completion = cg.new_Pvariable(completion_config[CONF_ID])
+                state = await cg.get_variable(
+                    completion_config[CONF_LIGHT_ID]
+                )
+                cg.add(completion.set_light(state))
+                cg.add(
+                    completion.set_expected(
+                        completion_config[CONF_EXPECTED]
+                    )
+                )
+                cg.add(binding.set_completion_probe(completion))
+                cg.add(
+                    binding.set_completion_timeout(
+                        completion_config[CONF_TIMEOUT].total_milliseconds
+                    )
+                )
             cg.add(var.add_declarative_binding(binding))
             await automation.build_automation(binding, [], binding_config)
 

@@ -6,6 +6,9 @@
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
 #include "declarative_command_handler.h"
 #endif
+#ifdef USE_ESPNOW_NET_PROTOCOL_LIGHT_COMPLETION
+#include "light_command_completion_probe.h"
+#endif
 #include "espidf_espnow_encrypted_radio.h"
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
