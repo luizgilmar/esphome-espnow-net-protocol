@@ -60,6 +60,18 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t dropped_completion_count() const {
     return dropped_completion_count_.load(std::memory_order_relaxed);
   }
+  uint32_t receive_callback_stack_free_bytes() const {
+    return receive_callback_stack_free_bytes_.load(std::memory_order_relaxed);
+  }
+  uint32_t send_callback_stack_free_bytes() const {
+    return send_callback_stack_free_bytes_.load(std::memory_order_relaxed);
+  }
+  int8_t receive_callback_core() const {
+    return receive_callback_core_.load(std::memory_order_relaxed);
+  }
+  int8_t send_callback_core() const {
+    return send_callback_core_.load(std::memory_order_relaxed);
+  }
   size_t received_queue_depth() const { return received_frames_.size(); }
   size_t completion_queue_depth() const { return send_completions_.size(); }
 
@@ -93,6 +105,10 @@ class EspIdfEspNowEncryptedRadio {
   std::atomic<uint32_t> sent_frame_count_{0};
   std::atomic<uint32_t> failed_send_count_{0};
   std::atomic<uint32_t> dropped_completion_count_{0};
+  std::atomic<uint32_t> receive_callback_stack_free_bytes_{0};
+  std::atomic<uint32_t> send_callback_stack_free_bytes_{0};
+  std::atomic<int8_t> receive_callback_core_{-1};
+  std::atomic<int8_t> send_callback_core_{-1};
   EspNowSpscQueue<EspNowReceivedFrame, RX_QUEUE_CAPACITY> received_frames_{};
   EspNowSpscQueue<EspNowSendCompletion, SEND_COMPLETION_QUEUE_CAPACITY>
       send_completions_{};

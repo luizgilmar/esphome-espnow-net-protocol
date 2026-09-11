@@ -19,11 +19,17 @@ static void log_runtime_health_(const char *phase,
                                 const EspIdfEspNowEncryptedRadio &radio) {
   const bool heap_ok = heap_caps_check_integrity_all(false);
   ESP_LOGW(TAG,
-           "Runtime health phase=%s stack_free_words=%u heap_free=%u "
+           "Runtime health phase=%s task=%s core=%d stack_free_bytes=%u "
+           "send_cb_core=%d send_cb_stack_free_bytes=%u recv_cb_core=%d "
+           "recv_cb_stack_free_bytes=%u heap_free=%u "
            "heap_min=%u heap_ok=%s rx_queue=%u completion_queue=%u "
            "dropped_rx=%u dropped_completion=%u",
-           phase,
+           phase, pcTaskGetName(nullptr), static_cast<int>(xPortGetCoreID()),
            static_cast<unsigned>(uxTaskGetStackHighWaterMark(nullptr)),
+           static_cast<int>(radio.send_callback_core()),
+           static_cast<unsigned>(radio.send_callback_stack_free_bytes()),
+           static_cast<int>(radio.receive_callback_core()),
+           static_cast<unsigned>(radio.receive_callback_stack_free_bytes()),
            static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_8BIT)),
            static_cast<unsigned>(
                heap_caps_get_minimum_free_size(MALLOC_CAP_8BIT)),
@@ -31,6 +37,23 @@ static void log_runtime_health_(const char *phase,
            static_cast<unsigned>(radio.completion_queue_depth()),
            static_cast<unsigned>(radio.dropped_frame_count()),
            static_cast<unsigned>(radio.dropped_completion_count()));
+}
+
+void EspNowNetProtocolComponent::set_runtime_enabled(bool enabled) {
+  if (runtime_enabled_ == enabled) return;
+  runtime_enabled_ = enabled;
+  if (!enabled) {
+    if (command_client_state_ != CommandClientState::IDLE)
+      (void) cancel_command(command_client_command_.transaction_id);
+    sender_.reset();
+    reliable_message_owner_ = ReliableMessageOwner::NONE;
+    radio_transmission_owner_ = RadioTransmissionOwner::NONE;
+    radio_transmission_peer_ = INVALID_PEER_INDEX;
+    command_result_notification_ready_ = false;
+    result_message_ready_ = false;
+    discard_radio_events_();
+  }
+  ESP_LOGI(TAG, "Runtime %s", enabled ? "enabled" : "disabled");
 }
 
 bool EspNowNetProtocolComponent::send_command(
@@ -65,7 +88,8 @@ bool EspNowNetProtocolComponent::send_command(
 
 bool EspNowNetProtocolComponent::start_command(
     PeerIndex peer, const NetCommand &command, uint32_t now_ms) {
-  if (command_client_state_ != CommandClientState::IDLE ||
+  if (!runtime_enabled_ ||
+      command_client_state_ != CommandClientState::IDLE ||
       reliable_message_owner_ != ReliableMessageOwner::NONE ||
       sender_.state() != ReliableSenderState::IDLE ||
       peer == INVALID_PEER_INDEX || !command.valid())
@@ -113,6 +137,10 @@ void EspNowNetProtocolComponent::loop() {
   const uint32_t now_ms = millis();
   radio_.loop(now_ms);
   if (!radio_.initialized() || is_failed()) return;
+  if (!runtime_enabled_) {
+    discard_radio_events_();
+    return;
+  }
   // Notify integrations only after the protocol call chain that produced the
   // result has unwound. This bounds main-task stack use during radio failures.
   dispatch_command_result_notification_();
@@ -394,14 +422,29 @@ void EspNowNetProtocolComponent::dispatch_application_ack_() {
   }
 }
 
+void EspNowNetProtocolComponent::discard_radio_events_() {
+  EspNowReceivedFrame received{};
+  for (size_t index = 0;
+       index < EspIdfEspNowEncryptedRadio::RX_QUEUE_CAPACITY; index++) {
+    if (!radio_.take_received_frame(received)) break;
+  }
+  EspNowSendCompletion completion{};
+  for (size_t index = 0;
+       index < EspIdfEspNowEncryptedRadio::SEND_COMPLETION_QUEUE_CAPACITY;
+       index++) {
+    if (!radio_.take_send_completion(completion)) break;
+  }
+}
+
 void EspNowNetProtocolComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
-                "ESP-NOW NetProtocol: %s channel=%u current=%u peers=%u "
+                "ESP-NOW NetProtocol: %s runtime=%s channel=%u current=%u peers=%u "
                 "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
                 "result_ok=%u result_failed=%u command_state=%u "
                 "command_progress=%u command_ok=%u command_failed=%u "
                 "command_canceled=%u",
                 radio_.initialized() ? "READY" : "WAITING",
+                runtime_enabled_ ? "ENABLED" : "DISABLED",
                 static_cast<unsigned>(radio_.expected_channel()),
                 static_cast<unsigned>(radio_.current_channel()),
                 static_cast<unsigned>(radio_.peer_count()),

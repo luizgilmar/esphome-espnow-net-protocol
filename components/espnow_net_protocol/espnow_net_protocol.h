@@ -50,6 +50,8 @@ class EspNowNetProtocolComponent : public Component {
   }
   EspIdfEspNowEncryptedRadio &radio() { return radio_; }
   const EspIdfEspNowEncryptedRadio &radio() const { return radio_; }
+  void set_runtime_enabled(bool enabled);
+  bool runtime_enabled() const { return runtime_enabled_; }
 
   void set_ack_timeout(uint32_t ack_timeout_ms) {
     retry_policy_.ack_timeout_ms = ack_timeout_ms;
@@ -157,6 +159,7 @@ class EspNowNetProtocolComponent : public Component {
   RadioTransmissionOwner radio_transmission_owner_{
       RadioTransmissionOwner::NONE};
   PeerIndex radio_transmission_peer_{INVALID_PEER_INDEX};
+  bool runtime_enabled_{true};
 
   void process_send_completion_(uint32_t now_ms);
   void process_received_frame_();
@@ -176,6 +179,7 @@ class EspNowNetProtocolComponent : public Component {
   void dispatch_command_result_notification_();
   void dispatch_sender_frame_(uint32_t now_ms);
   void dispatch_application_ack_();
+  void discard_radio_events_();
 };
 
 }  // namespace espnow_net_protocol

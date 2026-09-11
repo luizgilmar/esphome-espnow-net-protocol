@@ -9,6 +9,9 @@
 #include <esp_err.h>
 #include <esp_wifi.h>
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "esphome/core/log.h"
 
 namespace esphome {
@@ -180,6 +183,12 @@ void EspIdfEspNowEncryptedRadio::rollback_initialization_() {
 void EspIdfEspNowEncryptedRadio::receive_callback_(
     const esp_now_recv_info_t *info, const uint8_t *data, int data_len) {
   EspIdfEspNowEncryptedRadio *radio = instance_;
+  if (radio != nullptr) {
+    radio->receive_callback_stack_free_bytes_.store(
+        uxTaskGetStackHighWaterMark(nullptr), std::memory_order_relaxed);
+    radio->receive_callback_core_.store(xPortGetCoreID(),
+                                        std::memory_order_relaxed);
+  }
   static_assert(EspNowRadioFrame::MAX_SIZE == 250,
                 "ESP-NOW receive limit must match the legacy frame size");
   if (radio == nullptr || info == nullptr || data == nullptr || data_len <= 0 ||
@@ -207,6 +216,10 @@ void EspIdfEspNowEncryptedRadio::send_callback_(
     const esp_now_send_info_t *info, esp_now_send_status_t status) {
   EspIdfEspNowEncryptedRadio *radio = instance_;
   if (radio == nullptr || info == nullptr) return;
+  radio->send_callback_stack_free_bytes_.store(
+      uxTaskGetStackHighWaterMark(nullptr), std::memory_order_relaxed);
+  radio->send_callback_core_.store(xPortGetCoreID(),
+                                   std::memory_order_relaxed);
   const int peer_index = radio->find_peer_index_by_address_(info->des_addr);
   if (peer_index >= 0) {
     EspNowSendCompletion completion{};
