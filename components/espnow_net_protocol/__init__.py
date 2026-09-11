@@ -59,11 +59,16 @@ PEER_SCHEMA = cv.Schema({
     cv.Required(CONF_LMK): _key,
 })
 
-BINDING_SCHEMA = automation.validate_automation({
-    cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(DeclarativeCommandBinding),
-    cv.Required(CONF_RESOURCE): _bounded_text(63, "resource"),
-    cv.Required(CONF_COMMAND): _bounded_text(47, "command"),
-})
+BINDING_SCHEMA = automation.validate_automation(
+    {
+        cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(
+            DeclarativeCommandBinding
+        ),
+        cv.Required(CONF_RESOURCE): _bounded_text(63, "resource"),
+        cv.Required(CONF_COMMAND): _bounded_text(47, "command"),
+    },
+    single=True,
+)
 
 INBOUND_SCHEMA = cv.Schema({
     cv.Required(CONF_DEVICE_ID): _bounded_text(63, "device_id"),

@@ -15,6 +15,7 @@ def test_inbound_schema_is_bounded_and_automation_native() -> None:
     assert 'CONF_BINDINGS = "bindings"' in schema
     assert "cv.Length(min=1, max=16)" in schema
     assert "automation.validate_automation" in schema
+    assert "single=True" in schema
     assert "automation.build_automation(binding, [], binding_config)" in schema
     assert 'cg.add_define("USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND")' in schema
     assert "duplicate inbound resource/command binding" in schema

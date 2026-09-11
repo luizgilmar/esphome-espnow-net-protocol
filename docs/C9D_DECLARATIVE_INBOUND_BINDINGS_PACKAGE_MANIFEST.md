@@ -17,3 +17,6 @@
 The package adds a bounded, type-neutral and lambda-free inbound executor. It
 does not change radio framing, encryption, reliable delivery or existing TX
 handler integration.
+
+The binding automation schema is validated with `single=True`, preserving each
+binding as one mapping before duplicate-route validation and code generation.
