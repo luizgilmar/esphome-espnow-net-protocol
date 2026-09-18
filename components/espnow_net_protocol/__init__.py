@@ -147,8 +147,6 @@ def _validate(config):
                     f"{route[0]}/{route[1]}"
                 )
             routes.add(route)
-    elif application_sources:
-        raise cv.Invalid("peer application_source_id requires inbound configuration")
     return config
 
 CONFIG_SCHEMA = cv.All(
@@ -183,6 +181,8 @@ async def to_code(config):
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))
     if any(CONF_APPLICATION_SOURCE_ID in peer for peer in config[CONF_PEERS]):
         cg.add_define("USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION")
+        if CONF_INBOUND not in config:
+            cg.add(var.set_observe_application_identity(True))
         for peer in config[CONF_PEERS]:
             if CONF_APPLICATION_SOURCE_ID in peer:
                 cg.add(var.set_expected_application_source(
