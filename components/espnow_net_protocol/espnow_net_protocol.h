@@ -24,7 +24,8 @@ class NetCommandResultObserver {
                                      const NetResult &result) = 0;
 };
 
-class EspNowNetProtocolComponent : public Component {
+class EspNowNetProtocolComponent : public Component,
+                                    public NetCommandIdentityObserver {
  public:
   enum class CommandClientState : uint8_t {
     IDLE,
@@ -83,6 +84,10 @@ class EspNowNetProtocolComponent : public Component {
   void set_command_handler(NetCommandHandler *handler) {
     command_dispatcher_.set_handler(handler);
   }
+  void set_observe_application_identity(bool enabled) {
+    command_dispatcher_.set_identity_observer(enabled ? this : nullptr);
+  }
+  void on_command_identity(PeerIndex peer, const NetCommand &command) override;
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
   void configure_declarative_inbound(const char *device_id) {
     declarative_command_handler_.set_device_id(device_id);

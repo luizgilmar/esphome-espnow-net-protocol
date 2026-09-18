@@ -22,6 +22,7 @@ CONF_LMK = "lmk"
 CONF_ACK_TIMEOUT = "ack_timeout"
 CONF_MAX_ATTEMPTS = "max_attempts"
 CONF_INBOUND = "inbound"
+CONF_OBSERVE_APPLICATION_IDENTITY = "observe_application_identity"
 CONF_DEVICE_ID = "device_id"
 CONF_BINDINGS = "bindings"
 CONF_RESOURCE = "resource"
@@ -106,6 +107,7 @@ BINDING_SCHEMA = automation.validate_automation(
 
 INBOUND_SCHEMA = cv.Schema({
     cv.Required(CONF_DEVICE_ID): _bounded_text(63, "device_id"),
+    cv.Optional(CONF_OBSERVE_APPLICATION_IDENTITY, default=False): cv.boolean,
     cv.Required(CONF_BINDINGS): cv.All(
         cv.ensure_list(BINDING_SCHEMA), cv.Length(min=1, max=16)
     ),
@@ -169,6 +171,8 @@ async def to_code(config):
         cg.add_define("USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND")
         inbound = config[CONF_INBOUND]
         cg.add(var.configure_declarative_inbound(inbound[CONF_DEVICE_ID]))
+        if inbound[CONF_OBSERVE_APPLICATION_IDENTITY]:
+            cg.add(var.set_observe_application_identity(True))
         for binding_config in inbound[CONF_BINDINGS]:
             binding = cg.new_Pvariable(binding_config[CONF_TRIGGER_ID])
             cg.add(binding.set_resource(binding_config[CONF_RESOURCE]))

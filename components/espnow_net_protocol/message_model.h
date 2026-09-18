@@ -26,10 +26,14 @@ struct NetCommand {
   BoundedText<MAX_RESOURCE_LENGTH> resource{};
   BoundedText<MAX_NAME_LENGTH> name{};
   BoundedBytes<MAX_PAYLOAD_SIZE> payload{};
+  // Application identity is independent of the radio frame boot ID.
+  // Both fields are absent for legacy v1 commands.
+  BoundedText<MAX_DEVICE_ID_LENGTH> source_device_id{};
+  uint64_t source_boot_id{0};
   uint32_t timeout_ms{0};
   bool valid() const {
     return transaction_id != 0 && !device_id.empty() && !name.empty() &&
-           timeout_ms != 0;
+           timeout_ms != 0 && (source_device_id.empty() == (source_boot_id == 0));
   }
 };
 

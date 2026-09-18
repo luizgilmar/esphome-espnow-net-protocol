@@ -15,6 +15,17 @@ namespace espnow_net_protocol {
 
 static const char *const TAG = "espnow_net_protocol";
 
+void EspNowNetProtocolComponent::on_command_identity(
+    PeerIndex peer, const NetCommand &command) {
+  ESP_LOGI(TAG,
+           "Inbound identity observed peer=%u source_claim=%s app_boot_id=%llu tx=%llu version=%s (observation only)",
+           static_cast<unsigned>(peer),
+           command.source_device_id.empty() ? "<absent>" : command.source_device_id.c_str(),
+           static_cast<unsigned long long>(command.source_boot_id),
+           static_cast<unsigned long long>(command.transaction_id),
+           command.source_boot_id == 0 ? "v1" : "v2");
+}
+
 static void log_runtime_health_(const char *phase,
                                 const EspIdfEspNowEncryptedRadio &radio) {
   const bool heap_ok = heap_caps_check_integrity_all(false);

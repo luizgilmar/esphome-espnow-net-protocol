@@ -32,13 +32,30 @@ class FakeHandler : public NetCommandHandler {
   TransactionId transaction_id_{0};
 };
 
-EspNowInboundApplicationMessage command_message(TransactionId transaction_id) {
+class IdentityProbe : public NetCommandIdentityObserver {
+ public:
+  void on_command_identity(PeerIndex peer, const NetCommand &command) override {
+    ++observations;
+    last_peer = peer;
+    last_boot_id = command.source_boot_id;
+  }
+  unsigned observations{0};
+  PeerIndex last_peer{INVALID_PEER_INDEX};
+  uint64_t last_boot_id{0};
+};
+
+EspNowInboundApplicationMessage command_message(TransactionId transaction_id,
+                                                bool identified = false) {
   NetCommand command{};
   command.transaction_id = transaction_id;
   command.device_id.assign("relay-room");
   command.resource.assign("relay/1");
   command.name.assign("turn_on");
   command.timeout_ms = 100;
+  if (identified) {
+    assert(command.source_device_id.assign("tx"));
+    command.source_boot_id = 123456;
+  }
   EspNowCommandPayload payload{};
   EspNowCommandCodec codec{};
   assert(codec.encode(command, payload));
@@ -53,8 +70,11 @@ EspNowInboundApplicationMessage command_message(TransactionId transaction_id) {
 int main() {
   InboundCommandDispatcher dispatcher{};
   FakeHandler handler{};
+  IdentityProbe probe{};
+  dispatcher.set_identity_observer(&probe);
   dispatcher.set_handler(&handler);
   assert(dispatcher.accept(command_message(77), 10));
+  assert(probe.observations == 1 && probe.last_peer == 2 && probe.last_boot_id == 0);
   assert(dispatcher.state() == InboundCommandDispatcherState::ACTIVE);
 
   handler.next_result.transaction_id = 77;
@@ -84,5 +104,9 @@ int main() {
   assert(handler.canceled);
   assert(dispatcher.take_result(pending));
   assert(pending.terminal);
+  assert(dispatcher.accept(command_message(79, true), 210));
+  assert(probe.observations == 3 && probe.last_peer == 2 &&
+         probe.last_boot_id == 123456);
+  dispatcher.set_identity_observer(nullptr);
   return 0;
 }

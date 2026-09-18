@@ -27,6 +27,14 @@ class NetCommandHandler {
   virtual bool cancel(TransactionId transaction_id) = 0;
 };
 
+// Called only after a command payload has been decoded. The source fields
+// remain claims until the receiver binds them to its authenticated peer.
+class NetCommandIdentityObserver {
+ public:
+  virtual ~NetCommandIdentityObserver() = default;
+  virtual void on_command_identity(PeerIndex peer, const NetCommand &command) = 0;
+};
+
 enum class InboundCommandDispatcherState : uint8_t {
   IDLE,
   ACTIVE,
@@ -43,6 +51,9 @@ struct PendingNetResult {
 class InboundCommandDispatcher {
  public:
   void set_handler(NetCommandHandler *handler) { handler_ = handler; }
+  void set_identity_observer(NetCommandIdentityObserver *observer) {
+    identity_observer_ = observer;
+  }
 
   bool accept(const EspNowInboundApplicationMessage &inbound,
               uint32_t now_ms) {
@@ -63,6 +74,8 @@ class InboundCommandDispatcher {
                               now_ms);
       return true;
     }
+    if (identity_observer_ != nullptr)
+      identity_observer_->on_command_identity(peer_index_, command_);
     if (handler_ == nullptr) {
       this->complete_failure_(NetErrorCode::TARGET_UNAVAILABLE,
                               "no command handler registered", true, now_ms);
@@ -178,6 +191,7 @@ class InboundCommandDispatcher {
   }
 
   NetCommandHandler *handler_{nullptr};
+  NetCommandIdentityObserver *identity_observer_{nullptr};
   EspNowCommandCodec command_codec_{};
   EspNowResultCodec result_codec_{};
   NetCommand command_{};
