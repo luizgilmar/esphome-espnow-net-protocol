@@ -37,6 +37,11 @@ void EspNowNetProtocolComponent::on_command_identity(
            static_cast<unsigned long long>(command.source_boot_id),
            static_cast<unsigned long long>(command.transaction_id),
            command.source_boot_id == 0 ? "v1" : "v2", match_text);
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  if (match == PeerApplicationIdentityMatch::MATCH &&
+      this->verified_command_observer_ != nullptr)
+    this->verified_command_observer_->on_command_identity(peer, command);
+#endif
 }
 
 static void log_runtime_health_(const char *phase,

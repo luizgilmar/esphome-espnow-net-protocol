@@ -34,3 +34,10 @@ that delivered the encrypted frame and logs `peer_source=MATCH`, `MISMATCH`,
 authorize dispatch, authenticate the claimed boot ID, or alter the existing
 handler. The source strings live in generated code; the optional lookup uses
 one pointer per possible peer rather than 16 copied strings in RAM.
+
+When peer observation is configured, the endpoint also exposes an optional
+passive C++ observer for commands whose source claim matches the configured
+peer. It runs after payload decoding and before the existing handler, without
+claiming a replay-table entry or changing execution. Consumers must not use
+this observation alone as permission to execute: session validation and the
+shared MQTT/ESP-NOW admission gate remain separate migration steps.

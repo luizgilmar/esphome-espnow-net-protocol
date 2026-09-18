@@ -92,6 +92,13 @@ class EspNowNetProtocolComponent : public Component,
   }
   void on_command_identity(PeerIndex peer, const NetCommand &command) override;
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  // Passive integration point. The observer must not retain a reference to
+  // command or attempt to dispatch/acknowledge it.
+  void set_verified_command_observer(NetCommandIdentityObserver *observer) {
+    verified_command_observer_ = observer;
+  }
+#endif
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
   bool set_expected_application_source(const char *peer_id,
                                        const char *source_id) {
     return peer_application_identity_.set(this->peer_index(peer_id), source_id);
@@ -159,6 +166,9 @@ class EspNowNetProtocolComponent : public Component,
   NetCommand command_client_command_{};
   PeerIndex command_client_peer_{INVALID_PEER_INDEX};
   NetCommandResultObserver *command_result_observer_{nullptr};
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  NetCommandIdentityObserver *verified_command_observer_{nullptr};
+#endif
   NetResult command_result_notification_{};
   PeerIndex command_result_notification_peer_{INVALID_PEER_INDEX};
   bool command_result_notification_ready_{false};
