@@ -25,3 +25,12 @@ the payload: the adapter must bind them to a verified sender and session.
 
 The bounded wire payload remains within the 640-byte reassembled radio
 message limit: at most 439 bytes in version 1 and 511 bytes in version 2.
+
+For an inbound receiver that already observes identity, `peers` may declare
+an `application_source_id` for each configured radio peer. The component
+compares the decoded v2 source claim against the source assigned to the peer
+that delivered the encrypted frame and logs `peer_source=MATCH`, `MISMATCH`,
+`LEGACY`, or `UNCONFIGURED`. This comparison is observational: it does not
+authorize dispatch, authenticate the claimed boot ID, or alter the existing
+handler. The source strings live in generated code; the optional lookup uses
+one pointer per possible peer rather than 16 copied strings in RAM.

@@ -17,13 +17,26 @@ static const char *const TAG = "espnow_net_protocol";
 
 void EspNowNetProtocolComponent::on_command_identity(
     PeerIndex peer, const NetCommand &command) {
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  const auto match = this->peer_application_identity_.check(
+      peer, command.source_device_id.c_str(), command.source_boot_id);
+  const char *match_text = "UNCONFIGURED";
+  switch (match) {
+    case PeerApplicationIdentityMatch::MATCH: match_text = "MATCH"; break;
+    case PeerApplicationIdentityMatch::LEGACY: match_text = "LEGACY"; break;
+    case PeerApplicationIdentityMatch::MISMATCH: match_text = "MISMATCH"; break;
+    case PeerApplicationIdentityMatch::UNCONFIGURED: break;
+  }
+#else
+  const char *match_text = "UNCONFIGURED";
+#endif
   ESP_LOGI(TAG,
-           "Inbound identity observed peer=%u source_claim=%s app_boot_id=%llu tx=%llu version=%s (observation only)",
+           "Inbound identity observed peer=%u source_claim=%s app_boot_id=%llu tx=%llu version=%s peer_source=%s (observation only)",
            static_cast<unsigned>(peer),
            command.source_device_id.empty() ? "<absent>" : command.source_device_id.c_str(),
            static_cast<unsigned long long>(command.source_boot_id),
            static_cast<unsigned long long>(command.transaction_id),
-           command.source_boot_id == 0 ? "v1" : "v2");
+           command.source_boot_id == 0 ? "v1" : "v2", match_text);
 }
 
 static void log_runtime_health_(const char *phase,

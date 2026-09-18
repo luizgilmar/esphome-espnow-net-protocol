@@ -23,6 +23,7 @@ CONF_ACK_TIMEOUT = "ack_timeout"
 CONF_MAX_ATTEMPTS = "max_attempts"
 CONF_INBOUND = "inbound"
 CONF_OBSERVE_APPLICATION_IDENTITY = "observe_application_identity"
+CONF_APPLICATION_SOURCE_ID = "application_source_id"
 CONF_DEVICE_ID = "device_id"
 CONF_BINDINGS = "bindings"
 CONF_RESOURCE = "resource"
@@ -79,6 +80,7 @@ PEER_SCHEMA = cv.Schema({
     cv.Required(CONF_ID): cv.string_strict,
     cv.Required(CONF_ADDRESS): _address,
     cv.Required(CONF_LMK): _key,
+    cv.Optional(CONF_APPLICATION_SOURCE_ID): _bounded_text(63, "application_source_id"),
 })
 
 LIGHT_COMPLETION_SCHEMA = cv.Schema(
@@ -116,6 +118,7 @@ INBOUND_SCHEMA = cv.Schema({
 def _validate(config):
     ids = set()
     addresses = set()
+    application_sources = set()
     for peer in config[CONF_PEERS]:
         if not peer[CONF_ID] or len(peer[CONF_ID]) > 63:
             raise cv.Invalid("ESP-NOW peer id must contain 1 to 63 characters")
@@ -123,9 +126,18 @@ def _validate(config):
             raise cv.Invalid(f"duplicate ESP-NOW peer id: {peer[CONF_ID]}")
         if peer[CONF_ADDRESS] in addresses:
             raise cv.Invalid(f"duplicate ESP-NOW peer address: {peer[CONF_ADDRESS]}")
+        source = peer.get(CONF_APPLICATION_SOURCE_ID)
+        if source in application_sources and source is not None:
+            raise cv.Invalid(f"duplicate application_source_id: {source}")
+        if source is not None:
+            application_sources.add(source)
         ids.add(peer[CONF_ID])
         addresses.add(peer[CONF_ADDRESS])
     if CONF_INBOUND in config:
+        if application_sources and not config[CONF_INBOUND][CONF_OBSERVE_APPLICATION_IDENTITY]:
+            raise cv.Invalid(
+                "peer application_source_id requires inbound.observe_application_identity: true"
+            )
         routes = set()
         for binding in config[CONF_INBOUND][CONF_BINDINGS]:
             route = (binding[CONF_RESOURCE], binding[CONF_COMMAND])
@@ -135,6 +147,8 @@ def _validate(config):
                     f"{route[0]}/{route[1]}"
                 )
             routes.add(route)
+    elif application_sources:
+        raise cv.Invalid("peer application_source_id requires inbound configuration")
     return config
 
 CONFIG_SCHEMA = cv.All(
@@ -167,6 +181,13 @@ async def to_code(config):
     cg.add(var.configure(config[CONF_CHANNEL], config[CONF_PMK]))
     for peer in config[CONF_PEERS]:
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))
+    if any(CONF_APPLICATION_SOURCE_ID in peer for peer in config[CONF_PEERS]):
+        cg.add_define("USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION")
+        for peer in config[CONF_PEERS]:
+            if CONF_APPLICATION_SOURCE_ID in peer:
+                cg.add(var.set_expected_application_source(
+                    peer[CONF_ID], peer[CONF_APPLICATION_SOURCE_ID]
+                ))
     if CONF_INBOUND in config:
         cg.add_define("USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND")
         inbound = config[CONF_INBOUND]

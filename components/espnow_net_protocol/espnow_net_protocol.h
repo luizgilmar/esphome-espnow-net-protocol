@@ -3,6 +3,9 @@
 #include "esphome/core/component.h"
 #include "command_dispatcher.h"
 #include "command_codec.h"
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+#include "peer_application_identity.h"
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
 #include "declarative_command_handler.h"
 #endif
@@ -88,6 +91,12 @@ class EspNowNetProtocolComponent : public Component,
     command_dispatcher_.set_identity_observer(enabled ? this : nullptr);
   }
   void on_command_identity(PeerIndex peer, const NetCommand &command) override;
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  bool set_expected_application_source(const char *peer_id,
+                                       const char *source_id) {
+    return peer_application_identity_.set(this->peer_index(peer_id), source_id);
+  }
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
   void configure_declarative_inbound(const char *device_id) {
     declarative_command_handler_.set_device_id(device_id);
@@ -133,6 +142,9 @@ class EspNowNetProtocolComponent : public Component,
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
   InboundCommandDispatcher command_dispatcher_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
+  PeerApplicationIdentity peer_application_identity_{};
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_DECLARATIVE_INBOUND
   DeclarativeCommandHandler declarative_command_handler_{};
 #endif
