@@ -86,9 +86,20 @@ class EspNowNetProtocolComponent : public Component,
   }
   void set_command_handler(NetCommandHandler *handler) {
     command_dispatcher_.set_handler(handler);
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+    interrupt_dispatcher_.set_handler(handler);
+#endif
   }
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  // Enable only when the application handler supports an interrupt while an
+  // operation is active. Existing installations retain single-command flow.
+  void set_interruptible_inbound(bool enabled) { interruptible_inbound_ = enabled; }
+#endif
   void set_observe_application_identity(bool enabled) {
     command_dispatcher_.set_identity_observer(enabled ? this : nullptr);
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+    interrupt_dispatcher_.set_identity_observer(enabled ? this : nullptr);
+#endif
   }
   void on_command_identity(PeerIndex peer, const NetCommand &command) override;
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
@@ -149,6 +160,10 @@ class EspNowNetProtocolComponent : public Component,
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
   InboundCommandDispatcher command_dispatcher_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  InboundCommandDispatcher interrupt_dispatcher_{};
+  bool interruptible_inbound_{false};
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
   PeerApplicationIdentity peer_application_identity_{};
 #endif

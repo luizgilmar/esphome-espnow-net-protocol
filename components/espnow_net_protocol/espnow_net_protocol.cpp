@@ -181,6 +181,9 @@ void EspNowNetProtocolComponent::loop() {
     fail_command_client_(NetErrorCode::TIMED_OUT,
                          "functional result timed out", now_ms);
   command_dispatcher_.loop(now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  if (interruptible_inbound_) interrupt_dispatcher_.loop(now_ms);
+#endif
   sender_.loop(now_ms);
   process_owned_sender_completion_();
   process_dispatcher_(now_ms);
@@ -194,10 +197,18 @@ void EspNowNetProtocolComponent::process_application_message_(
   const EspNowFrameKind kind = runtime_.application_message_kind();
   const bool command_client_result = inbound_matches_command_client_();
   const bool late_terminal = inbound_matches_last_terminal_();
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  const bool interrupt_lane_available = interruptible_inbound_ &&
+      command_dispatcher_.state() == InboundCommandDispatcherState::ACTIVE &&
+      interrupt_dispatcher_.state() == InboundCommandDispatcherState::IDLE;
+#else
+  const bool interrupt_lane_available = false;
+#endif
   // Keep the reassembler-owned payload in place until its bounded consumer is
   // ready. This prevents an ACCEPTED delivery ACK followed by a local drop.
   if ((kind == EspNowFrameKind::COMMAND &&
-       command_dispatcher_.state() != InboundCommandDispatcherState::IDLE) ||
+       command_dispatcher_.state() != InboundCommandDispatcherState::IDLE &&
+       !interrupt_lane_available) ||
       (kind == EspNowFrameKind::RESULT && result_message_ready_ &&
        !command_client_result && !late_terminal) ||
       (kind == EspNowFrameKind::RESULT && command_client_result &&
@@ -206,7 +217,15 @@ void EspNowNetProtocolComponent::process_application_message_(
   EspNowInboundApplicationMessage inbound{};
   if (!runtime_.take_application_message(inbound)) return;
   if (inbound.message.envelope.kind == EspNowFrameKind::COMMAND) {
-    if (!command_dispatcher_.accept(inbound, now_ms)) {
+    bool accepted = false;
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+    if (command_dispatcher_.state() != InboundCommandDispatcherState::IDLE)
+      accepted = interrupt_dispatcher_.accept_interrupt(inbound,
+                                                        command_dispatcher_, now_ms);
+    else
+#endif
+      accepted = command_dispatcher_.accept(inbound, now_ms);
+    if (!accepted) {
       ESP_LOGW(TAG, "Inbound command dispatcher busy tx=%llu",
                static_cast<unsigned long long>(
                    inbound.message.envelope.transaction_id));
@@ -236,12 +255,19 @@ void EspNowNetProtocolComponent::process_application_message_(
 }
 
 void EspNowNetProtocolComponent::process_dispatcher_(uint32_t now_ms) {
-  if (!command_dispatcher_.has_result() ||
-      reliable_message_owner_ != ReliableMessageOwner::NONE ||
+  if (reliable_message_owner_ != ReliableMessageOwner::NONE ||
       sender_.state() != ReliableSenderState::IDLE)
     return;
+  // The interrupt response takes priority so a stop can complete while the
+  // original operation remains in progress. The sender remains serialized.
+  InboundCommandDispatcher *dispatcher = &command_dispatcher_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  if (interruptible_inbound_ && interrupt_dispatcher_.has_result())
+    dispatcher = &interrupt_dispatcher_;
+#endif
+  if (!dispatcher->has_result()) return;
   PendingNetResult pending{};
-  if (!command_dispatcher_.take_result(pending)) return;
+  if (!dispatcher->take_result(pending)) return;
   if (!sender_.start(pending.peer_index, EspNowFrameKind::RESULT,
                      pending.transaction_id, pending.payload.data.data(),
                      pending.payload.data.size())) {

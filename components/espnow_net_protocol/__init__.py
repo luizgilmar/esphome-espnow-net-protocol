@@ -21,6 +21,7 @@ CONF_ADDRESS = "address"
 CONF_LMK = "lmk"
 CONF_ACK_TIMEOUT = "ack_timeout"
 CONF_MAX_ATTEMPTS = "max_attempts"
+CONF_INTERRUPTIBLE_INBOUND = "interruptible_inbound"
 CONF_INBOUND = "inbound"
 CONF_OBSERVE_APPLICATION_IDENTITY = "observe_application_identity"
 CONF_APPLICATION_SOURCE_ID = "application_source_id"
@@ -160,6 +161,7 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_ACK_TIMEOUT, default="250ms"):
             cv.positive_time_period_milliseconds,
         cv.Optional(CONF_MAX_ATTEMPTS, default=3): cv.int_range(min=1, max=8),
+        cv.Optional(CONF_INTERRUPTIBLE_INBOUND, default=False): cv.boolean,
         cv.Optional(CONF_INBOUND): INBOUND_SCHEMA,
     }).extend(cv.COMPONENT_SCHEMA),
     _validate,
@@ -176,6 +178,9 @@ async def to_code(config):
     await cg.register_component(var, config)
     cg.add(var.set_ack_timeout(config[CONF_ACK_TIMEOUT].total_milliseconds))
     cg.add(var.set_max_attempts(config[CONF_MAX_ATTEMPTS]))
+    if config[CONF_INTERRUPTIBLE_INBOUND]:
+        cg.add_define("USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND")
+        cg.add(var.set_interruptible_inbound(True))
     cg.add(var.configure(config[CONF_CHANNEL], config[CONF_PMK]))
     for peer in config[CONF_PEERS]:
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))

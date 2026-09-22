@@ -102,6 +102,29 @@ class InboundCommandDispatcher {
     return true;
   }
 
+  bool accept_interrupt(const EspNowInboundApplicationMessage &inbound,
+                        const InboundCommandDispatcher &operation,
+                        uint32_t now_ms) {
+    if (state_ != InboundCommandDispatcherState::IDLE ||
+        operation.state_ != InboundCommandDispatcherState::ACTIVE)
+      return false;
+    NetCommand incoming{};
+    if (inbound.peer_index != operation.peer_index_ ||
+        !command_codec_.decode(inbound.message.envelope.transaction_id,
+                               inbound.message.data.data(),
+                               inbound.message.data.size(), incoming) ||
+        std::strcmp(incoming.name.c_str(), "stop") != 0 ||
+        std::strcmp(incoming.device_id.c_str(),
+                    operation.command_.device_id.c_str()) != 0 ||
+        std::strcmp(incoming.resource.c_str(),
+                    operation.command_.resource.c_str()) != 0 ||
+        std::strcmp(incoming.source_device_id.c_str(),
+                    operation.command_.source_device_id.c_str()) != 0 ||
+        incoming.source_boot_id != operation.command_.source_boot_id)
+      return false;
+    return this->accept(inbound, now_ms);
+  }
+
   void loop(uint32_t now_ms) {
     if (state_ != InboundCommandDispatcherState::ACTIVE) return;
     if ((now_ms - started_ms_) >= command_.timeout_ms) {

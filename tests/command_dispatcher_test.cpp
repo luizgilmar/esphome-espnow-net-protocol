@@ -45,12 +45,13 @@ class IdentityProbe : public NetCommandIdentityObserver {
 };
 
 EspNowInboundApplicationMessage command_message(TransactionId transaction_id,
-                                                bool identified = false) {
+                                                bool identified = false,
+                                                const char *name = "turn_on") {
   NetCommand command{};
   command.transaction_id = transaction_id;
   command.device_id.assign("relay-room");
   command.resource.assign("relay/1");
-  command.name.assign("turn_on");
+  command.name.assign(name);
   command.timeout_ms = 100;
   if (identified) {
     assert(command.source_device_id.assign("tx"));
@@ -107,6 +108,16 @@ int main() {
   assert(dispatcher.accept(command_message(79, true), 210));
   assert(probe.observations == 3 && probe.last_peer == 2 &&
          probe.last_boot_id == 123456);
+  InboundCommandDispatcher interrupt{};
+  FakeHandler interrupt_handler{};
+  interrupt.set_handler(&interrupt_handler);
+  assert(!interrupt.accept_interrupt(command_message(80, true, "turn_on"),
+                                     dispatcher, 211));
+  assert(!interrupt.accept_interrupt(command_message(80, false, "stop"),
+                                     dispatcher, 211));
+  assert(interrupt.accept_interrupt(command_message(80, true, "stop"),
+                                    dispatcher, 211));
+  assert(interrupt.state() == InboundCommandDispatcherState::ACTIVE);
   dispatcher.set_identity_observer(nullptr);
   return 0;
 }
