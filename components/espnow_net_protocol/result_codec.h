@@ -177,7 +177,7 @@ class EspNowResultCodec {
   }
   static bool valid_error_(NetErrorCode value) {
     return static_cast<uint8_t>(value) <=
-           static_cast<uint8_t>(NetErrorCode::INTERNAL_ERROR);
+           static_cast<uint8_t>(NetErrorCode::INTERRUPTED);
   }
   bool fail_(EspNowResultCodecError error) { last_error_ = error; return false; }
   static bool flags_consistent_(uint8_t flags, size_t es, size_t ed,

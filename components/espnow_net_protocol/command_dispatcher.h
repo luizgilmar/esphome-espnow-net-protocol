@@ -24,6 +24,17 @@ class NetCommandHandler {
   virtual void loop(uint32_t now_ms) = 0;
   virtual bool has_result() const = 0;
   virtual bool take_result(NetResult &result) = 0;
+  // Transaction-aware variants allow one bounded handler to serve an
+  // operation and its interrupt without either dispatcher stealing a result.
+  // Existing single-lane handlers remain source compatible.
+  virtual bool has_result(TransactionId transaction_id) const {
+    (void) transaction_id;
+    return this->has_result();
+  }
+  virtual bool take_result(TransactionId transaction_id, NetResult &result) {
+    (void) transaction_id;
+    return this->take_result(result);
+  }
   virtual bool cancel(TransactionId transaction_id) = 0;
 };
 
@@ -135,9 +146,9 @@ class InboundCommandDispatcher {
       return;
     }
     handler_->loop(now_ms);
-    if (!handler_->has_result()) return;
+    if (!handler_->has_result(transaction_id_)) return;
     NetResult result{};
-    if (!handler_->take_result(result) ||
+    if (!handler_->take_result(transaction_id_, result) ||
         result.transaction_id != transaction_id_ || !result.consistent()) {
       this->complete_failure_(NetErrorCode::INTERNAL_ERROR,
                               "command handler returned invalid result", false,
