@@ -72,10 +72,14 @@ void EspNowNetProtocolComponent::set_runtime_enabled(bool enabled) {
   if (runtime_enabled_ == enabled) return;
   runtime_enabled_ = enabled;
   if (!enabled) {
-    if (command_client_state_ != CommandClientState::IDLE)
-      (void) cancel_command(command_client_command_.transaction_id);
     sender_.reset();
     reliable_message_owner_ = ReliableMessageOwner::NONE;
+    if (command_client_state_ != CommandClientState::IDLE)
+      (void) cancel_command(command_client_command_.transaction_id);
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+    if (command_client_state_2_ != CommandClientState::IDLE)
+      (void) cancel_command(command_client_command_2_.transaction_id);
+#endif
     radio_transmission_owner_ = RadioTransmissionOwner::NONE;
     radio_transmission_peer_ = INVALID_PEER_INDEX;
     command_result_notification_ready_ = false;
@@ -117,38 +121,62 @@ bool EspNowNetProtocolComponent::send_command(
 
 bool EspNowNetProtocolComponent::start_command(
     PeerIndex peer, const NetCommand &command, uint32_t now_ms) {
-  if (!runtime_enabled_ ||
-      command_client_state_ != CommandClientState::IDLE ||
-      reliable_message_owner_ != ReliableMessageOwner::NONE ||
-      sender_.state() != ReliableSenderState::IDLE ||
-      peer == INVALID_PEER_INDEX || !command.valid())
+  if (!this->can_start_command() || peer == INVALID_PEER_INDEX ||
+      !command.valid())
     return false;
+  uint8_t slot = 0;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  slot = command_client_state_ == CommandClientState::IDLE ? 0 : 1;
+#endif
   EspNowCommandPayload encoded{};
   if (!command_codec_.encode(command, encoded) ||
       !sender_.start(peer, EspNowFrameKind::COMMAND, command.transaction_id,
                      encoded.data.data(), encoded.data.size()))
     return false;
-  command_client_command_ = command;
-  command_client_peer_ = peer;
-  command_client_started_ms_ = now_ms;
-  command_client_state_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
+  if (slot == 0) {
+    command_client_command_ = command;
+    command_client_peer_ = peer;
+    command_client_started_ms_ = now_ms;
+    command_client_state_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
+  }
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  else {
+    command_client_command_2_ = command;
+    command_client_peer_2_ = peer;
+    command_client_started_ms_2_ = now_ms;
+    command_client_state_2_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
+  }
+#endif
+  command_sender_slot_ = slot;
   reliable_message_owner_ = ReliableMessageOwner::COMMAND_CLIENT;
   log_runtime_health_("command_started", radio_);
   return true;
 }
 
 bool EspNowNetProtocolComponent::cancel_command(TransactionId transaction_id) {
-  if (transaction_id == 0 || command_client_state_ == CommandClientState::IDLE ||
-      command_client_command_.transaction_id != transaction_id)
-    return false;
-  if (reliable_message_owner_ == ReliableMessageOwner::COMMAND_CLIENT) {
+  if (transaction_id == 0) return false;
+  uint8_t slot = 0;
+  if (command_client_state_ != CommandClientState::IDLE &&
+      command_client_command_.transaction_id == transaction_id) {
+    slot = 0;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  } else if (command_client_state_2_ != CommandClientState::IDLE &&
+             command_client_command_2_.transaction_id == transaction_id) {
+    slot = 1;
+#endif
+  } else return false;
+  if (reliable_message_owner_ == ReliableMessageOwner::COMMAND_CLIENT &&
+      command_sender_slot_ == slot) {
     sender_.reset();
     reliable_message_owner_ = ReliableMessageOwner::NONE;
   }
   last_terminal_peer_ = command_client_peer_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (slot == 1) last_terminal_peer_ = command_client_peer_2_;
+#endif
   last_terminal_transaction_id_ = transaction_id;
   command_client_cancel_count_++;
-  clear_command_client_();
+  clear_command_client_(slot);
   return true;
 }
 
@@ -180,6 +208,13 @@ void EspNowNetProtocolComponent::loop() {
       now_ms - command_client_started_ms_ >= command_client_command_.timeout_ms)
     fail_command_client_(NetErrorCode::TIMED_OUT,
                          "functional result timed out", now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (command_client_state_2_ == CommandClientState::WAITING_FOR_RESULT &&
+      now_ms - command_client_started_ms_2_ >=
+          command_client_command_2_.timeout_ms)
+    fail_command_client_(NetErrorCode::TIMED_OUT,
+                         "functional result timed out", now_ms, 1);
+#endif
   command_dispatcher_.loop(now_ms);
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   if (interruptible_inbound_) interrupt_dispatcher_.loop(now_ms);
@@ -195,7 +230,8 @@ void EspNowNetProtocolComponent::process_application_message_(
     uint32_t now_ms) {
   if (!runtime_.application_message_ready()) return;
   const EspNowFrameKind kind = runtime_.application_message_kind();
-  const bool command_client_result = inbound_matches_command_client_();
+  const int8_t command_client_slot = matching_command_client_();
+  const bool command_client_result = command_client_slot >= 0;
   const bool late_terminal = inbound_matches_last_terminal_();
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   const bool interrupt_lane_available = interruptible_inbound_ &&
@@ -234,7 +270,8 @@ void EspNowNetProtocolComponent::process_application_message_(
   }
   if (inbound.message.envelope.kind == EspNowFrameKind::RESULT) {
     if (command_client_result) {
-      process_command_client_result_(inbound, now_ms);
+      process_command_client_result_(inbound, now_ms,
+                                     static_cast<uint8_t>(command_client_slot));
       return;
     }
     if (late_terminal) {
@@ -283,17 +320,25 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
     if (sender_.state() == ReliableSenderState::ACKNOWLEDGED) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
-      command_client_state_ = CommandClientState::WAITING_FOR_RESULT;
+      if (command_sender_slot_ == 0)
+        command_client_state_ = CommandClientState::WAITING_FOR_RESULT;
+      else
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+        command_client_state_2_ = CommandClientState::WAITING_FOR_RESULT;
+#else
+        command_client_state_ = CommandClientState::WAITING_FOR_RESULT;
+#endif
     } else if (sender_.state() == ReliableSenderState::REJECTED) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
       fail_command_client_(NetErrorCode::REMOTE_REJECTED,
-                           "delivery rejected", millis());
+                           "delivery rejected", millis(), command_sender_slot_);
     } else if (sender_.state() == ReliableSenderState::TIMED_OUT) {
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
       fail_command_client_(NetErrorCode::TIMED_OUT,
-                           "delivery acknowledgement timed out", millis());
+                           "delivery acknowledgement timed out", millis(),
+                           command_sender_slot_);
     }
     return;
   }
@@ -311,12 +356,19 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
   }
 }
 
-bool EspNowNetProtocolComponent::inbound_matches_command_client_() const {
-  return command_client_state_ == CommandClientState::WAITING_FOR_RESULT &&
-         runtime_.application_message_kind() == EspNowFrameKind::RESULT &&
-         runtime_.application_message_peer_index() == command_client_peer_ &&
-         runtime_.application_message_transaction_id() ==
-             command_client_command_.transaction_id;
+int8_t EspNowNetProtocolComponent::matching_command_client_() const {
+  if (runtime_.application_message_kind() != EspNowFrameKind::RESULT) return -1;
+  if (command_client_state_ == CommandClientState::WAITING_FOR_RESULT &&
+      runtime_.application_message_peer_index() == command_client_peer_ &&
+      runtime_.application_message_transaction_id() ==
+          command_client_command_.transaction_id) return 0;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (command_client_state_2_ == CommandClientState::WAITING_FOR_RESULT &&
+      runtime_.application_message_peer_index() == command_client_peer_2_ &&
+      runtime_.application_message_transaction_id() ==
+          command_client_command_2_.transaction_id) return 1;
+#endif
+  return -1;
 }
 
 bool EspNowNetProtocolComponent::inbound_matches_last_terminal_() const {
@@ -328,14 +380,25 @@ bool EspNowNetProtocolComponent::inbound_matches_last_terminal_() const {
 }
 
 void EspNowNetProtocolComponent::process_command_client_result_(
-    const EspNowInboundApplicationMessage &inbound, uint32_t now_ms) {
+    const EspNowInboundApplicationMessage &inbound, uint32_t now_ms,
+    uint8_t slot) {
+  const NetCommand *command = &command_client_command_;
+  PeerIndex peer = command_client_peer_;
+  uint32_t started_ms = command_client_started_ms_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (slot == 1) {
+    command = &command_client_command_2_;
+    peer = command_client_peer_2_;
+    started_ms = command_client_started_ms_2_;
+  }
+#endif
   NetResult result{};
   if (!result_codec_.decode(
-          command_client_command_.transaction_id, inbound.message.data.data(),
+          command->transaction_id, inbound.message.data.data(),
           inbound.message.data.size(),
-          now_ms - command_client_started_ms_, result)) {
+          now_ms - started_ms, result)) {
     fail_command_client_(NetErrorCode::PROTOCOL_ERROR,
-                         "invalid functional result", now_ms);
+                         "invalid functional result", now_ms, slot);
     return;
   }
   ESP_LOGI(TAG, "Command result tx=%llu status=%u latency=%u error=%u",
@@ -345,61 +408,84 @@ void EspNowNetProtocolComponent::process_command_client_result_(
            static_cast<unsigned>(result.error.code));
   if (result.status == NetResultStatus::IN_PROGRESS) {
     command_client_progress_count_++;
-    queue_command_result_notification_(command_client_peer_, result);
+    queue_command_result_notification_(peer, result);
     return;
   }
   if (result.status == NetResultStatus::SUCCEEDED)
     command_client_success_count_++;
   else
     command_client_failure_count_++;
-  finish_command_client_(result);
+  finish_command_client_(result, slot);
 }
 
 void EspNowNetProtocolComponent::fail_command_client_(
-    NetErrorCode error, const char *message, uint32_t now_ms) {
+    NetErrorCode error, const char *message, uint32_t now_ms, uint8_t slot) {
   log_runtime_health_(error == NetErrorCode::TIMED_OUT ? "before_timeout_failure"
                                                        : "before_command_failure",
                       radio_);
   command_client_failure_count_++;
+  const NetCommand *command = &command_client_command_;
+  uint32_t started_ms = command_client_started_ms_;
+  CommandClientState state = command_client_state_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (slot == 1) {
+    command = &command_client_command_2_;
+    started_ms = command_client_started_ms_2_;
+    state = command_client_state_2_;
+  }
+#endif
   NetResult result{};
-  result.transaction_id = command_client_command_.transaction_id;
+  result.transaction_id = command->transaction_id;
   result.status = NetResultStatus::FAILED;
-  result.latency_ms = now_ms - command_client_started_ms_;
+  result.latency_ms = now_ms - started_ms;
   result.error.code = error;
   result.error.retryable = error == NetErrorCode::TIMED_OUT ||
                            error == NetErrorCode::CONNECTION_FAILED;
   (void) result.error.message.assign(message);
   result.execution.started =
-      command_client_state_ == CommandClientState::WAITING_FOR_RESULT;
+      state == CommandClientState::WAITING_FOR_RESULT;
   ESP_LOGW(TAG, "Command failed tx=%llu latency=%u error=%u reason=%s",
            static_cast<unsigned long long>(
                result.transaction_id),
            static_cast<unsigned>(result.latency_ms),
            static_cast<unsigned>(error), message);
-  finish_command_client_(result);
+  finish_command_client_(result, slot);
 }
 
 void EspNowNetProtocolComponent::finish_command_client_(
-    const NetResult &result) {
-  const PeerIndex peer = command_client_peer_;
+    const NetResult &result, uint8_t slot) {
+  PeerIndex peer = command_client_peer_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  if (slot == 1) peer = command_client_peer_2_;
+#endif
   last_terminal_peer_ = peer;
   last_terminal_transaction_id_ = result.transaction_id;
-  clear_command_client_();
+  clear_command_client_(slot);
   queue_command_result_notification_(peer, result);
 }
 
-void EspNowNetProtocolComponent::clear_command_client_() {
-  command_client_command_ = {};
-  command_client_peer_ = INVALID_PEER_INDEX;
-  command_client_started_ms_ = 0;
-  command_client_state_ = CommandClientState::IDLE;
+void EspNowNetProtocolComponent::clear_command_client_(uint8_t slot) {
+  if (slot == 0) {
+    command_client_command_ = {};
+    command_client_peer_ = INVALID_PEER_INDEX;
+    command_client_started_ms_ = 0;
+    command_client_state_ = CommandClientState::IDLE;
+  }
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  else {
+    command_client_command_2_ = {};
+    command_client_peer_2_ = INVALID_PEER_INDEX;
+    command_client_started_ms_2_ = 0;
+    command_client_state_2_ = CommandClientState::IDLE;
+  }
+#endif
 }
 
 void EspNowNetProtocolComponent::queue_command_result_notification_(
     PeerIndex peer, const NetResult &result) {
-  if (command_result_observer_ == nullptr ||
-      command_result_notification_ready_)
-    return;
+  bool observed = false;
+  for (auto *observer : command_result_observers_) observed |= observer != nullptr;
+  if (!observed || command_result_notification_ready_) return;
   command_result_notification_ = result;
   command_result_notification_peer_ = peer;
   command_result_notification_ready_ = true;
@@ -408,9 +494,10 @@ void EspNowNetProtocolComponent::queue_command_result_notification_(
 void EspNowNetProtocolComponent::dispatch_command_result_notification_() {
   if (!command_result_notification_ready_) return;
   command_result_notification_ready_ = false;
-  if (command_result_observer_ != nullptr)
-    command_result_observer_->on_net_command_result(
-        command_result_notification_peer_, command_result_notification_);
+  for (auto *observer : command_result_observers_)
+    if (observer != nullptr)
+      observer->on_net_command_result(command_result_notification_peer_,
+                                      command_result_notification_);
   command_result_notification_ = {};
   command_result_notification_peer_ = INVALID_PEER_INDEX;
 }

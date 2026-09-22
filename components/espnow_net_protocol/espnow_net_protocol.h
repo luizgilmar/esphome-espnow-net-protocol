@@ -132,7 +132,23 @@ class EspNowNetProtocolComponent : public Component,
                      uint32_t now_ms);
   bool cancel_command(TransactionId transaction_id);
   void set_command_result_observer(NetCommandResultObserver *observer) {
-    command_result_observer_ = observer;
+    if (observer == nullptr) return;
+    for (auto *registered : command_result_observers_)
+      if (registered == observer) return;
+    for (auto &registered : command_result_observers_)
+      if (registered == nullptr) {
+        registered = observer;
+        return;
+      }
+  }
+  bool can_start_command() const {
+    bool slot_available = command_client_state_ == CommandClientState::IDLE;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+    slot_available |= command_client_state_2_ == CommandClientState::IDLE;
+#endif
+    return runtime_enabled_ && slot_available &&
+           reliable_message_owner_ == ReliableMessageOwner::NONE &&
+           sender_.state() == ReliableSenderState::IDLE;
   }
   CommandClientState command_client_state() const {
     return command_client_state_;
@@ -179,8 +195,14 @@ class EspNowNetProtocolComponent : public Component,
   EspNowCommandCodec command_codec_{};
   EspNowResultCodec result_codec_{};
   NetCommand command_client_command_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  NetCommand command_client_command_2_{};
+#endif
   PeerIndex command_client_peer_{INVALID_PEER_INDEX};
-  NetCommandResultObserver *command_result_observer_{nullptr};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  PeerIndex command_client_peer_2_{INVALID_PEER_INDEX};
+#endif
+  NetCommandResultObserver *command_result_observers_[2]{};
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
   NetCommandIdentityObserver *verified_command_observer_{nullptr};
 #endif
@@ -189,11 +211,18 @@ class EspNowNetProtocolComponent : public Component,
   bool command_result_notification_ready_{false};
   TransactionId next_declarative_transaction_id_{1};
   uint32_t command_client_started_ms_{0};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  uint32_t command_client_started_ms_2_{0};
+#endif
   uint32_t command_client_progress_count_{0};
   uint32_t command_client_success_count_{0};
   uint32_t command_client_failure_count_{0};
   uint32_t command_client_cancel_count_{0};
   CommandClientState command_client_state_{CommandClientState::IDLE};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  CommandClientState command_client_state_2_{CommandClientState::IDLE};
+#endif
+  uint8_t command_sender_slot_{0};
   PeerIndex last_terminal_peer_{INVALID_PEER_INDEX};
   TransactionId last_terminal_transaction_id_{0};
   uint64_t local_boot_id_{0};
@@ -208,14 +237,15 @@ class EspNowNetProtocolComponent : public Component,
   void process_application_message_(uint32_t now_ms);
   void process_dispatcher_(uint32_t now_ms);
   void process_owned_sender_completion_();
-  bool inbound_matches_command_client_() const;
+  int8_t matching_command_client_() const;
   bool inbound_matches_last_terminal_() const;
   void process_command_client_result_(
-      const EspNowInboundApplicationMessage &inbound, uint32_t now_ms);
+      const EspNowInboundApplicationMessage &inbound, uint32_t now_ms,
+      uint8_t slot);
   void fail_command_client_(NetErrorCode error, const char *message,
-                            uint32_t now_ms);
-  void finish_command_client_(const NetResult &result);
-  void clear_command_client_();
+                            uint32_t now_ms, uint8_t slot = 0);
+  void finish_command_client_(const NetResult &result, uint8_t slot = 0);
+  void clear_command_client_(uint8_t slot = 0);
   void queue_command_result_notification_(PeerIndex peer,
                                           const NetResult &result);
   void dispatch_command_result_notification_();

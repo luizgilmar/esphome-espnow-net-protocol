@@ -38,6 +38,6 @@ def test_functional_result_is_correlated_separately_from_delivery_ack() -> None:
     source = read("espnow_net_protocol.cpp")
     assert "application_message_transaction_id() const" in runtime
     assert "application_message_peer_index() const" in runtime
-    assert "inbound_matches_command_client_" in source
+    assert "matching_command_client_" in source
     assert "result_codec_.decode" in source
     assert "Command result tx=%llu" in source
