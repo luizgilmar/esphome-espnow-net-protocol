@@ -84,6 +84,9 @@ void EspNowNetProtocolComponent::set_runtime_enabled(bool enabled) {
     radio_transmission_peer_ = INVALID_PEER_INDEX;
     command_result_notification_ready_ = false;
     result_message_ready_ = false;
+    background_result_transaction_id_ = 0;
+    background_result_completion_ready_ = false;
+    background_result_succeeded_ = false;
     discard_radio_events_();
   }
   ESP_LOGI(TAG, "Runtime %s", enabled ? "enabled" : "disabled");
@@ -150,6 +153,23 @@ bool EspNowNetProtocolComponent::start_command(
   command_sender_slot_ = slot;
   reliable_message_owner_ = ReliableMessageOwner::COMMAND_CLIENT;
   log_runtime_health_("command_started", radio_);
+  return true;
+}
+
+bool EspNowNetProtocolComponent::start_background_result(
+    PeerIndex peer, const NetResult &result) {
+  if (!runtime_enabled_ || peer == INVALID_PEER_INDEX ||
+      reliable_message_owner_ != ReliableMessageOwner::NONE ||
+      sender_.state() != ReliableSenderState::IDLE ||
+      background_result_completion_ready_ || !result.consistent())
+    return false;
+  EspNowResultPayload encoded{};
+  if (!result_codec_.encode(result, encoded) ||
+      !sender_.start(peer, EspNowFrameKind::RESULT, result.transaction_id,
+                     encoded.data.data(), encoded.data.size()))
+    return false;
+  reliable_message_owner_ = ReliableMessageOwner::BACKGROUND_RESULT;
+  background_result_transaction_id_ = result.transaction_id;
   return true;
 }
 
@@ -246,6 +266,7 @@ void EspNowNetProtocolComponent::process_application_message_(
        command_dispatcher_.state() != InboundCommandDispatcherState::IDLE &&
        !interrupt_lane_available) ||
       (kind == EspNowFrameKind::RESULT && result_message_ready_ &&
+       !this->has_unsolicited_result_observer_() &&
        !command_client_result && !late_terminal) ||
       (kind == EspNowFrameKind::RESULT && command_client_result &&
        command_result_notification_ready_))
@@ -281,6 +302,7 @@ void EspNowNetProtocolComponent::process_application_message_(
                    inbound.message.envelope.transaction_id));
       return;
     }
+    if (this->dispatch_unsolicited_result_(inbound)) return;
     result_message_ = inbound;
     result_message_ready_ = true;
     return;
@@ -289,6 +311,32 @@ void EspNowNetProtocolComponent::process_application_message_(
            static_cast<unsigned>(inbound.message.envelope.kind),
            static_cast<unsigned long long>(
                inbound.message.envelope.transaction_id));
+}
+
+bool EspNowNetProtocolComponent::has_unsolicited_result_observer_() const {
+  for (auto *observer : this->unsolicited_result_observers_)
+    if (observer != nullptr) return true;
+  return false;
+}
+
+bool EspNowNetProtocolComponent::dispatch_unsolicited_result_(
+    const EspNowInboundApplicationMessage &inbound) {
+  if (!this->has_unsolicited_result_observer_()) return false;
+  NetResult result{};
+  if (!this->result_codec_.decode(
+          inbound.message.envelope.transaction_id,
+          inbound.message.data.data(), inbound.message.data.size(), 0,
+          result)) {
+    ESP_LOGW(TAG, "Invalid unsolicited result peer=%u tx=%llu",
+             static_cast<unsigned>(inbound.peer_index),
+             static_cast<unsigned long long>(
+                 inbound.message.envelope.transaction_id));
+    return true;
+  }
+  for (auto *observer : this->unsolicited_result_observers_)
+    if (observer != nullptr)
+      observer->on_unsolicited_net_result(inbound.peer_index, result);
+  return true;
 }
 
 void EspNowNetProtocolComponent::process_dispatcher_(uint32_t now_ms) {
@@ -339,6 +387,23 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
       fail_command_client_(NetErrorCode::TIMED_OUT,
                            "delivery acknowledgement timed out", millis(),
                            command_sender_slot_);
+    }
+    return;
+  }
+  if (reliable_message_owner_ == ReliableMessageOwner::BACKGROUND_RESULT) {
+    if (sender_.state() == ReliableSenderState::ACKNOWLEDGED) {
+      background_result_success_count_++;
+      background_result_succeeded_ = true;
+      background_result_completion_ready_ = true;
+      sender_.reset();
+      reliable_message_owner_ = ReliableMessageOwner::NONE;
+    } else if (sender_.state() == ReliableSenderState::REJECTED ||
+               sender_.state() == ReliableSenderState::TIMED_OUT) {
+      background_result_failure_count_++;
+      background_result_succeeded_ = false;
+      background_result_completion_ready_ = true;
+      sender_.reset();
+      reliable_message_owner_ = ReliableMessageOwner::NONE;
     }
     return;
   }

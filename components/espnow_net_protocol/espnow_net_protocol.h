@@ -27,6 +27,13 @@ class NetCommandResultObserver {
                                      const NetResult &result) = 0;
 };
 
+class NetUnsolicitedResultObserver {
+ public:
+  virtual ~NetUnsolicitedResultObserver() = default;
+  virtual void on_unsolicited_net_result(PeerIndex peer,
+                                         const NetResult &result) = 0;
+};
+
 class EspNowNetProtocolComponent : public Component,
                                     public NetCommandIdentityObserver {
  public:
@@ -70,6 +77,23 @@ class EspNowNetProtocolComponent : public Component,
         !sender_.start(peer, kind, transaction_id, data, size))
       return false;
     reliable_message_owner_ = ReliableMessageOwner::API_CALLER;
+    return true;
+  }
+  // Low-priority, bounded application result. Admission succeeds only while
+  // the shared reliable sender is completely idle; the caller never owns a
+  // queue slot and repeated state changes must be coalesced by the producer.
+  bool start_background_result(PeerIndex peer, const NetResult &result);
+  bool background_result_active() const {
+    return reliable_message_owner_ == ReliableMessageOwner::BACKGROUND_RESULT;
+  }
+  bool take_background_result_completion(TransactionId &transaction_id,
+                                         bool &succeeded) {
+    if (!background_result_completion_ready_) return false;
+    transaction_id = background_result_transaction_id_;
+    succeeded = background_result_succeeded_;
+    background_result_completion_ready_ = false;
+    background_result_transaction_id_ = 0;
+    background_result_succeeded_ = false;
     return true;
   }
   ReliableSenderState sender_state() const { return sender_.state(); }
@@ -141,6 +165,17 @@ class EspNowNetProtocolComponent : public Component,
         return;
       }
   }
+  void set_unsolicited_result_observer(
+      NetUnsolicitedResultObserver *observer) {
+    if (observer == nullptr) return;
+    for (auto *registered : unsolicited_result_observers_)
+      if (registered == observer) return;
+    for (auto &registered : unsolicited_result_observers_)
+      if (registered == nullptr) {
+        registered = observer;
+        return;
+      }
+  }
   bool can_start_command() const {
     bool slot_available = command_client_state_ == CommandClientState::IDLE;
 #ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
@@ -171,6 +206,7 @@ class EspNowNetProtocolComponent : public Component,
     API_CALLER,
     DISPATCHER_RESULT,
     COMMAND_CLIENT,
+    BACKGROUND_RESULT,
   };
   EspIdfEspNowEncryptedRadio radio_{};
   EspNowProtocolRuntime runtime_{};
@@ -192,6 +228,11 @@ class EspNowNetProtocolComponent : public Component,
   ReliableMessageOwner reliable_message_owner_{ReliableMessageOwner::NONE};
   uint32_t result_delivery_success_count_{0};
   uint32_t result_delivery_failure_count_{0};
+  uint32_t background_result_success_count_{0};
+  uint32_t background_result_failure_count_{0};
+  TransactionId background_result_transaction_id_{0};
+  bool background_result_completion_ready_{false};
+  bool background_result_succeeded_{false};
   EspNowCommandCodec command_codec_{};
   EspNowResultCodec result_codec_{};
   NetCommand command_client_command_{};
@@ -203,6 +244,7 @@ class EspNowNetProtocolComponent : public Component,
   PeerIndex command_client_peer_2_{INVALID_PEER_INDEX};
 #endif
   NetCommandResultObserver *command_result_observers_[2]{};
+  NetUnsolicitedResultObserver *unsolicited_result_observers_[2]{};
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
   NetCommandIdentityObserver *verified_command_observer_{nullptr};
 #endif
@@ -242,6 +284,9 @@ class EspNowNetProtocolComponent : public Component,
   void process_command_client_result_(
       const EspNowInboundApplicationMessage &inbound, uint32_t now_ms,
       uint8_t slot);
+  bool dispatch_unsolicited_result_(
+      const EspNowInboundApplicationMessage &inbound);
+  bool has_unsolicited_result_observer_() const;
   void fail_command_client_(NetErrorCode error, const char *message,
                             uint32_t now_ms, uint8_t slot = 0);
   void finish_command_client_(const NetResult &result, uint8_t slot = 0);
