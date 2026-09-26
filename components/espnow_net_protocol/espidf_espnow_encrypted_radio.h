@@ -23,6 +23,7 @@ class EspIdfEspNowEncryptedRadio {
   static constexpr uint32_t CHANNEL_POLL_INTERVAL_MS = 250;
   static constexpr uint32_t CHANNEL_STABILIZATION_MS = 5000;
   static constexpr uint32_t INITIALIZATION_RETRY_MS = 5000;
+  static constexpr uint32_t PEER_REFRESH_COOLDOWN_MS = 30000;
   static constexpr size_t RX_QUEUE_CAPACITY = 3;
   static constexpr size_t SEND_COMPLETION_QUEUE_CAPACITY = 4;
 
@@ -32,6 +33,7 @@ class EspIdfEspNowEncryptedRadio {
   void loop(uint32_t now_ms);
   bool send_frame(PeerIndex peer_index, const uint8_t *data, size_t size);
   bool send_frame(const char *destination_id, const uint8_t *data, size_t size);
+  bool request_peer_refresh(PeerIndex peer_index);
   bool take_received_frame(EspNowReceivedFrame &frame) {
     return received_frames_.pop(frame);
   }
@@ -60,6 +62,12 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t dropped_completion_count() const {
     return dropped_completion_count_.load(std::memory_order_relaxed);
   }
+  uint32_t peer_refresh_success_count() const {
+    return peer_refresh_success_count_;
+  }
+  uint32_t peer_refresh_failure_count() const {
+    return peer_refresh_failure_count_;
+  }
   uint32_t receive_callback_stack_free_bytes() const {
     return receive_callback_stack_free_bytes_.load(std::memory_order_relaxed);
   }
@@ -83,6 +91,9 @@ class EspIdfEspNowEncryptedRadio {
 
  protected:
   bool initialize_();
+  bool add_configured_peer_(PeerIndex peer_index);
+  bool refresh_peer_(PeerIndex peer_index, uint32_t now_ms);
+  void process_peer_refresh_(uint32_t now_ms);
   void rollback_initialization_();
   static bool parse_key_(const char *hex, uint8_t *out);
   static bool parse_address_(const char *value, uint8_t *out);
@@ -99,6 +110,11 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t last_channel_poll_ms_{0};
   uint32_t channel_stable_since_ms_{0};
   uint32_t last_initialization_attempt_ms_{0};
+  uint32_t peer_refresh_last_ms_[MAX_PEERS]{};
+  uint16_t peer_refresh_pending_mask_{0};
+  uint16_t peer_refresh_attempted_mask_{0};
+  uint32_t peer_refresh_success_count_{0};
+  uint32_t peer_refresh_failure_count_{0};
   int32_t last_initialization_error_{0};
   std::atomic<uint32_t> received_frame_count_{0};
   std::atomic<uint32_t> dropped_frame_count_{0};
@@ -118,6 +134,7 @@ class EspIdfEspNowEncryptedRadio {
   bool initialized_{false};
   bool channel_matches_{false};
   bool channel_stable_{false};
+  bool channel_mismatch_reported_{false};
 };
 
 }  // namespace espnow_net_protocol

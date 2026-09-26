@@ -382,6 +382,7 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
       fail_command_client_(NetErrorCode::REMOTE_REJECTED,
                            "delivery rejected", millis(), command_sender_slot_);
     } else if (sender_.state() == ReliableSenderState::TIMED_OUT) {
+      (void) radio_.request_peer_refresh(sender_.peer_index());
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
       fail_command_client_(NetErrorCode::TIMED_OUT,
@@ -399,6 +400,8 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
       reliable_message_owner_ = ReliableMessageOwner::NONE;
     } else if (sender_.state() == ReliableSenderState::REJECTED ||
                sender_.state() == ReliableSenderState::TIMED_OUT) {
+      if (sender_.state() == ReliableSenderState::TIMED_OUT)
+        (void) radio_.request_peer_refresh(sender_.peer_index());
       background_result_failure_count_++;
       background_result_succeeded_ = false;
       background_result_completion_ready_ = true;
@@ -415,6 +418,8 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
     reliable_message_owner_ = ReliableMessageOwner::NONE;
   } else if (sender_.state() == ReliableSenderState::REJECTED ||
              sender_.state() == ReliableSenderState::TIMED_OUT) {
+    if (sender_.state() == ReliableSenderState::TIMED_OUT)
+      (void) radio_.request_peer_refresh(sender_.peer_index());
     result_delivery_failure_count_++;
     sender_.reset();
     reliable_message_owner_ = ReliableMessageOwner::NONE;
@@ -647,6 +652,7 @@ void EspNowNetProtocolComponent::dump_config() {
   ESP_LOGCONFIG(TAG,
                 "ESP-NOW NetProtocol: %s runtime=%s channel=%u current=%u peers=%u "
                 "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
+                "peer_refresh_ok=%u peer_refresh_failed=%u "
                 "result_ok=%u result_failed=%u command_state=%u "
                 "command_progress=%u command_ok=%u command_failed=%u "
                 "command_canceled=%u",
@@ -660,6 +666,8 @@ void EspNowNetProtocolComponent::dump_config() {
                 static_cast<unsigned>(radio_.dropped_frame_count()),
                 static_cast<unsigned>(radio_.sent_frame_count()),
                 static_cast<unsigned>(radio_.failed_send_count()),
+                static_cast<unsigned>(radio_.peer_refresh_success_count()),
+                static_cast<unsigned>(radio_.peer_refresh_failure_count()),
                 static_cast<unsigned>(result_delivery_success_count_),
                 static_cast<unsigned>(result_delivery_failure_count_),
                 static_cast<unsigned>(command_client_state_),

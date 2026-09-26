@@ -75,8 +75,15 @@ PeerIndex EspIdfEspNowEncryptedRadio::peer_index(
   return peers_.index_for_id(destination_id);
 }
 
+bool EspIdfEspNowEncryptedRadio::request_peer_refresh(
+    PeerIndex peer_index) {
+  if (peer_index >= peers_.size() || peer_index >= 16) return false;
+  peer_refresh_pending_mask_ |= static_cast<uint16_t>(1U << peer_index);
+  return true;
+}
+
 void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
-  if (!configured_ || initialized_ || peers_.size() == 0 ||
+  if (!configured_ || peers_.size() == 0 ||
       now_ms - last_channel_poll_ms_ < CHANNEL_POLL_INTERVAL_MS)
     return;
   last_channel_poll_ms_ = now_ms;
@@ -92,11 +99,17 @@ void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
   channel_matches_ = primary == expected_channel_;
   if (!channel_matches_) {
     channel_stable_ = false;
-    ESP_LOGW(TAG, "Waiting for configured Wi-Fi channel expected=%u current=%u",
-             static_cast<unsigned>(expected_channel_),
-             static_cast<unsigned>(current_channel_));
+    if (!channel_mismatch_reported_) {
+      channel_mismatch_reported_ = true;
+      ESP_LOGW(TAG,
+               "Configured Wi-Fi channel lost expected=%u current=%u; "
+               "ESP-NOW recovery paused",
+               static_cast<unsigned>(expected_channel_),
+               static_cast<unsigned>(current_channel_));
+    }
     return;
   }
+  channel_mismatch_reported_ = false;
   if (!channel_stable_) {
     channel_stable_ = true;
     channel_stable_since_ms_ = now_ms;
@@ -105,6 +118,10 @@ void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
     return;
   }
   if (now_ms - channel_stable_since_ms_ < CHANNEL_STABILIZATION_MS) return;
+  if (initialized_) {
+    this->process_peer_refresh_(now_ms);
+    return;
+  }
   if (last_initialization_attempt_ms_ != 0 &&
       now_ms - last_initialization_attempt_ms_ < INITIALIZATION_RETRY_MS)
     return;
@@ -148,17 +165,7 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
   }
 
   for (size_t index = 0; index < peers_.size(); index++) {
-    const PeerIdentity *configured_peer = peers_.peer(index);
-    esp_now_peer_info_t peer{};
-    std::memcpy(peer.peer_addr, configured_peer->address,
-                EspNowEncryptedPeer::MAC_SIZE);
-    std::memcpy(peer.lmk, configured_peer->lmk, EspNowEncryptedPeer::KEY_SIZE);
-    peer.channel = 0;
-    peer.ifidx = WIFI_IF_STA;
-    peer.encrypt = true;
-    result = esp_now_add_peer(&peer);
-    last_initialization_error_ = result;
-    if (result != ESP_OK) {
+    if (!this->add_configured_peer_(static_cast<PeerIndex>(index))) {
       esp_now_unregister_send_cb();
       esp_now_unregister_recv_cb();
       rollback_initialization_();
@@ -172,6 +179,65 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
            static_cast<unsigned>(current_channel_),
            static_cast<unsigned>(peers_.size()));
   return true;
+}
+
+bool EspIdfEspNowEncryptedRadio::add_configured_peer_(
+    PeerIndex peer_index) {
+  const PeerIdentity *configured_peer = peers_.peer(peer_index);
+  if (configured_peer == nullptr) return false;
+  esp_now_peer_info_t peer{};
+  std::memcpy(peer.peer_addr, configured_peer->address,
+              EspNowEncryptedPeer::MAC_SIZE);
+  std::memcpy(peer.lmk, configured_peer->lmk, EspNowEncryptedPeer::KEY_SIZE);
+  peer.channel = 0;
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = true;
+  const esp_err_t result = esp_now_add_peer(&peer);
+  last_initialization_error_ = result;
+  return result == ESP_OK;
+}
+
+bool EspIdfEspNowEncryptedRadio::refresh_peer_(PeerIndex peer_index,
+                                                uint32_t now_ms) {
+  const PeerIdentity *configured_peer = peers_.peer(peer_index);
+  if (!initialized_ || configured_peer == nullptr) return false;
+  peer_refresh_last_ms_[peer_index] = now_ms;
+  peer_refresh_attempted_mask_ |= static_cast<uint16_t>(1U << peer_index);
+  const esp_err_t removed = esp_now_del_peer(configured_peer->address);
+  if (removed != ESP_OK && removed != ESP_ERR_ESPNOW_NOT_FOUND) {
+    last_initialization_error_ = removed;
+    return false;
+  }
+  return this->add_configured_peer_(peer_index);
+}
+
+void EspIdfEspNowEncryptedRadio::process_peer_refresh_(uint32_t now_ms) {
+  for (PeerIndex peer_index = 0; peer_index < peers_.size(); ++peer_index) {
+    const uint16_t bit = static_cast<uint16_t>(1U << peer_index);
+    if ((peer_refresh_pending_mask_ & bit) == 0) continue;
+    if ((peer_refresh_attempted_mask_ & bit) != 0 &&
+        now_ms - peer_refresh_last_ms_[peer_index] <
+            PEER_REFRESH_COOLDOWN_MS)
+      continue;
+    peer_refresh_pending_mask_ &= static_cast<uint16_t>(~bit);
+    const bool succeeded = this->refresh_peer_(peer_index, now_ms);
+    if (succeeded) {
+      peer_refresh_success_count_++;
+      ESP_LOGI(TAG, "Encrypted peer refreshed peer=%u successes=%u failures=%u",
+               static_cast<unsigned>(peer_index),
+               static_cast<unsigned>(peer_refresh_success_count_),
+               static_cast<unsigned>(peer_refresh_failure_count_));
+    } else {
+      peer_refresh_failure_count_++;
+      peer_refresh_pending_mask_ |= bit;
+      ESP_LOGW(TAG,
+               "Encrypted peer refresh deferred peer=%u error=%s (0x%08x)",
+               static_cast<unsigned>(peer_index),
+               esp_err_to_name(static_cast<esp_err_t>(last_initialization_error_)),
+               static_cast<unsigned>(last_initialization_error_));
+    }
+    return;
+  }
 }
 
 void EspIdfEspNowEncryptedRadio::rollback_initialization_() {
