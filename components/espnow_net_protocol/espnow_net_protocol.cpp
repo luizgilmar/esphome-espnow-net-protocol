@@ -212,6 +212,15 @@ void EspNowNetProtocolComponent::setup() {
 
 void EspNowNetProtocolComponent::loop() {
   const uint32_t now_ms = millis();
+  bool recovery_permitted =
+      radio_transmission_owner_ == RadioTransmissionOwner::NONE &&
+      reliable_message_owner_ == ReliableMessageOwner::NONE &&
+      sender_.state() == ReliableSenderState::IDLE &&
+      command_client_state_ == CommandClientState::IDLE;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+  recovery_permitted &= command_client_state_2_ == CommandClientState::IDLE;
+#endif
+  radio_.set_recovery_permitted(recovery_permitted);
   radio_.loop(now_ms);
   if (!radio_.initialized() || is_failed()) return;
   if (!runtime_enabled_) {
@@ -383,6 +392,7 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
                            "delivery rejected", millis(), command_sender_slot_);
     } else if (sender_.state() == ReliableSenderState::TIMED_OUT) {
       (void) radio_.request_peer_refresh(sender_.peer_index());
+      (void) radio_.request_radio_recovery(millis());
       sender_.reset();
       reliable_message_owner_ = ReliableMessageOwner::NONE;
       fail_command_client_(NetErrorCode::TIMED_OUT,
@@ -402,6 +412,8 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
                sender_.state() == ReliableSenderState::TIMED_OUT) {
       if (sender_.state() == ReliableSenderState::TIMED_OUT)
         (void) radio_.request_peer_refresh(sender_.peer_index());
+      if (sender_.state() == ReliableSenderState::TIMED_OUT)
+        (void) radio_.request_radio_recovery(millis());
       background_result_failure_count_++;
       background_result_succeeded_ = false;
       background_result_completion_ready_ = true;
@@ -420,6 +432,8 @@ void EspNowNetProtocolComponent::process_owned_sender_completion_() {
              sender_.state() == ReliableSenderState::TIMED_OUT) {
     if (sender_.state() == ReliableSenderState::TIMED_OUT)
       (void) radio_.request_peer_refresh(sender_.peer_index());
+    if (sender_.state() == ReliableSenderState::TIMED_OUT)
+      (void) radio_.request_radio_recovery(millis());
     result_delivery_failure_count_++;
     sender_.reset();
     reliable_message_owner_ = ReliableMessageOwner::NONE;
@@ -653,6 +667,7 @@ void EspNowNetProtocolComponent::dump_config() {
                 "ESP-NOW NetProtocol: %s runtime=%s channel=%u current=%u peers=%u "
                 "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
                 "peer_refresh_ok=%u peer_refresh_failed=%u "
+                "radio_recovery_ok=%u radio_recovery_failed=%u "
                 "result_ok=%u result_failed=%u command_state=%u "
                 "command_progress=%u command_ok=%u command_failed=%u "
                 "command_canceled=%u",
@@ -668,6 +683,8 @@ void EspNowNetProtocolComponent::dump_config() {
                 static_cast<unsigned>(radio_.failed_send_count()),
                 static_cast<unsigned>(radio_.peer_refresh_success_count()),
                 static_cast<unsigned>(radio_.peer_refresh_failure_count()),
+                static_cast<unsigned>(radio_.radio_recovery_success_count()),
+                static_cast<unsigned>(radio_.radio_recovery_failure_count()),
                 static_cast<unsigned>(result_delivery_success_count_),
                 static_cast<unsigned>(result_delivery_failure_count_),
                 static_cast<unsigned>(command_client_state_),

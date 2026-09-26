@@ -24,6 +24,9 @@ class EspIdfEspNowEncryptedRadio {
   static constexpr uint32_t CHANNEL_STABILIZATION_MS = 5000;
   static constexpr uint32_t INITIALIZATION_RETRY_MS = 5000;
   static constexpr uint32_t PEER_REFRESH_COOLDOWN_MS = 30000;
+  static constexpr uint32_t RADIO_RECOVERY_BASE_DELAY_MS = 3000;
+  static constexpr uint32_t RADIO_RECOVERY_JITTER_MS = 7000;
+  static constexpr uint32_t RADIO_RECOVERY_COOLDOWN_MS = 30000;
   static constexpr size_t RX_QUEUE_CAPACITY = 3;
   static constexpr size_t SEND_COMPLETION_QUEUE_CAPACITY = 4;
 
@@ -34,6 +37,10 @@ class EspIdfEspNowEncryptedRadio {
   bool send_frame(PeerIndex peer_index, const uint8_t *data, size_t size);
   bool send_frame(const char *destination_id, const uint8_t *data, size_t size);
   bool request_peer_refresh(PeerIndex peer_index);
+  bool request_radio_recovery(uint32_t now_ms);
+  void set_recovery_permitted(bool permitted) {
+    recovery_permitted_ = permitted;
+  }
   bool take_received_frame(EspNowReceivedFrame &frame) {
     return received_frames_.pop(frame);
   }
@@ -68,6 +75,12 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t peer_refresh_failure_count() const {
     return peer_refresh_failure_count_;
   }
+  uint32_t radio_recovery_success_count() const {
+    return radio_recovery_success_count_;
+  }
+  uint32_t radio_recovery_failure_count() const {
+    return radio_recovery_failure_count_;
+  }
   uint32_t receive_callback_stack_free_bytes() const {
     return receive_callback_stack_free_bytes_.load(std::memory_order_relaxed);
   }
@@ -94,6 +107,11 @@ class EspIdfEspNowEncryptedRadio {
   bool add_configured_peer_(PeerIndex peer_index);
   bool refresh_peer_(PeerIndex peer_index, uint32_t now_ms);
   void process_peer_refresh_(uint32_t now_ms);
+  void observe_wifi_association_(uint32_t now_ms);
+  void schedule_radio_recovery_(uint32_t now_ms, const char *reason);
+  bool process_radio_recovery_(uint32_t now_ms);
+  void shutdown_radio_();
+  uint32_t recovery_jitter_ms_() const;
   void rollback_initialization_();
   static bool parse_key_(const char *hex, uint8_t *out);
   static bool parse_address_(const char *value, uint8_t *out);
@@ -115,6 +133,10 @@ class EspIdfEspNowEncryptedRadio {
   uint16_t peer_refresh_attempted_mask_{0};
   uint32_t peer_refresh_success_count_{0};
   uint32_t peer_refresh_failure_count_{0};
+  uint32_t radio_recovery_due_ms_{0};
+  uint32_t radio_recovery_last_ms_{0};
+  uint32_t radio_recovery_success_count_{0};
+  uint32_t radio_recovery_failure_count_{0};
   int32_t last_initialization_error_{0};
   std::atomic<uint32_t> received_frame_count_{0};
   std::atomic<uint32_t> dropped_frame_count_{0};
@@ -135,6 +157,11 @@ class EspIdfEspNowEncryptedRadio {
   bool channel_matches_{false};
   bool channel_stable_{false};
   bool channel_mismatch_reported_{false};
+  bool wifi_association_known_{false};
+  bool wifi_associated_{false};
+  bool radio_recovery_pending_{false};
+  bool radio_recovery_in_progress_{false};
+  bool recovery_permitted_{true};
 };
 
 }  // namespace espnow_net_protocol

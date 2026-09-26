@@ -82,11 +82,19 @@ bool EspIdfEspNowEncryptedRadio::request_peer_refresh(
   return true;
 }
 
+bool EspIdfEspNowEncryptedRadio::request_radio_recovery(uint32_t now_ms) {
+  if (!configured_ || peers_.size() == 0) return false;
+  this->schedule_radio_recovery_(now_ms, "delivery_timeout");
+  return true;
+}
+
 void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
   if (!configured_ || peers_.size() == 0 ||
       now_ms - last_channel_poll_ms_ < CHANNEL_POLL_INTERVAL_MS)
     return;
   last_channel_poll_ms_ = now_ms;
+
+  this->observe_wifi_association_(now_ms);
 
   wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
   uint8_t primary = 0;
@@ -99,6 +107,8 @@ void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
   channel_matches_ = primary == expected_channel_;
   if (!channel_matches_) {
     channel_stable_ = false;
+    if (initialized_)
+      this->schedule_radio_recovery_(now_ms, "channel_changed");
     if (!channel_mismatch_reported_) {
       channel_mismatch_reported_ = true;
       ESP_LOGW(TAG,
@@ -118,6 +128,7 @@ void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
     return;
   }
   if (now_ms - channel_stable_since_ms_ < CHANNEL_STABILIZATION_MS) return;
+  if (this->process_radio_recovery_(now_ms)) return;
   if (initialized_) {
     this->process_peer_refresh_(now_ms);
     return;
@@ -175,9 +186,16 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
 
   initialized_ = true;
   last_initialization_error_ = ESP_OK;
-  ESP_LOGI(TAG, "Encrypted ESP-NOW ready channel=%u peers=%u",
+  if (radio_recovery_in_progress_) {
+    radio_recovery_in_progress_ = false;
+    radio_recovery_success_count_++;
+  }
+  ESP_LOGI(TAG,
+           "Encrypted ESP-NOW ready channel=%u peers=%u recoveries=%u failures=%u",
            static_cast<unsigned>(current_channel_),
-           static_cast<unsigned>(peers_.size()));
+           static_cast<unsigned>(peers_.size()),
+           static_cast<unsigned>(radio_recovery_success_count_),
+           static_cast<unsigned>(radio_recovery_failure_count_));
   return true;
 }
 
@@ -238,6 +256,87 @@ void EspIdfEspNowEncryptedRadio::process_peer_refresh_(uint32_t now_ms) {
     }
     return;
   }
+}
+
+void EspIdfEspNowEncryptedRadio::observe_wifi_association_(uint32_t now_ms) {
+  wifi_ap_record_t access_point{};
+  const bool associated = esp_wifi_sta_get_ap_info(&access_point) == ESP_OK;
+  if (!wifi_association_known_) {
+    wifi_association_known_ = true;
+    wifi_associated_ = associated;
+    return;
+  }
+  if (associated == wifi_associated_) return;
+  wifi_associated_ = associated;
+  this->schedule_radio_recovery_(
+      now_ms, associated ? "wifi_reconnected" : "wifi_disconnected");
+}
+
+void EspIdfEspNowEncryptedRadio::schedule_radio_recovery_(
+    uint32_t now_ms, const char *reason) {
+  if (radio_recovery_pending_ || radio_recovery_in_progress_) return;
+  radio_recovery_due_ms_ =
+      now_ms + RADIO_RECOVERY_BASE_DELAY_MS + this->recovery_jitter_ms_();
+  radio_recovery_pending_ = true;
+  ESP_LOGW(TAG,
+           "ESP-NOW radio recovery scheduled reason=%s delay=%u associated=%s",
+           reason == nullptr ? "unknown" : reason,
+           static_cast<unsigned>(radio_recovery_due_ms_ - now_ms),
+           wifi_associated_ ? "YES" : "NO");
+}
+
+bool EspIdfEspNowEncryptedRadio::process_radio_recovery_(uint32_t now_ms) {
+  if (!radio_recovery_pending_ || !recovery_permitted_ ||
+      static_cast<int32_t>(now_ms - radio_recovery_due_ms_) < 0)
+    return false;
+  if (radio_recovery_last_ms_ != 0 &&
+      now_ms - radio_recovery_last_ms_ < RADIO_RECOVERY_COOLDOWN_MS)
+    return false;
+
+  radio_recovery_pending_ = false;
+  radio_recovery_in_progress_ = true;
+  radio_recovery_last_ms_ = now_ms;
+  peer_refresh_pending_mask_ = 0;
+  peer_refresh_attempted_mask_ = 0;
+  this->shutdown_radio_();
+  channel_stable_ = false;
+  channel_stable_since_ms_ = now_ms;
+  last_initialization_attempt_ms_ = 0;
+  ESP_LOGW(TAG, "ESP-NOW radio epoch restarted; awaiting stable channel");
+  return true;
+}
+
+void EspIdfEspNowEncryptedRadio::shutdown_radio_() {
+  esp_err_t result = ESP_OK;
+  if (initialized_ || instance_ == this) {
+    esp_now_unregister_send_cb();
+    esp_now_unregister_recv_cb();
+    result = esp_now_deinit();
+  }
+  if (result != ESP_OK) {
+    last_initialization_error_ = result;
+    radio_recovery_failure_count_++;
+  }
+  if (instance_ == this) instance_ = nullptr;
+  initialized_ = false;
+  EspNowReceivedFrame received{};
+  while (received_frames_.pop(received)) {}
+  EspNowSendCompletion completion{};
+  while (send_completions_.pop(completion)) {}
+}
+
+uint32_t EspIdfEspNowEncryptedRadio::recovery_jitter_ms_() const {
+  uint8_t address[EspNowEncryptedPeer::MAC_SIZE]{};
+  if (esp_wifi_get_mac(WIFI_IF_STA, address) != ESP_OK)
+    return RADIO_RECOVERY_JITTER_MS / 2U;
+  uint32_t hash = 2166136261UL;
+  for (uint8_t value : address) {
+    hash ^= value;
+    hash *= 16777619UL;
+  }
+  return RADIO_RECOVERY_JITTER_MS == 0
+             ? 0
+             : hash % (RADIO_RECOVERY_JITTER_MS + 1U);
 }
 
 void EspIdfEspNowEncryptedRadio::rollback_initialization_() {
