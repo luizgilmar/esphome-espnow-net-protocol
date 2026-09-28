@@ -27,6 +27,12 @@ class EspIdfEspNowEncryptedRadio {
   static constexpr uint32_t RADIO_RECOVERY_BASE_DELAY_MS = 3000;
   static constexpr uint32_t RADIO_RECOVERY_JITTER_MS = 7000;
   static constexpr uint32_t RADIO_RECOVERY_COOLDOWN_MS = 30000;
+  static constexpr uint32_t WIFI_RECONNECT_GRACE_BASE_MS = 10000;
+  static constexpr uint32_t WIFI_RECONNECT_GRACE_JITTER_MS = 20000;
+  static constexpr uint32_t WIFI_RECONNECT_HOLD_BASE_MS = 30000;
+  static constexpr uint32_t WIFI_RECONNECT_HOLD_JITTER_MS = 30000;
+  static constexpr uint32_t WIFI_RECONNECT_WINDOW_MS = 8000;
+  static constexpr uint32_t WIFI_RECONNECT_REQUEST_RETRY_MS = 5000;
   static constexpr size_t RX_QUEUE_CAPACITY = 3;
   static constexpr size_t SEND_COMPLETION_QUEUE_CAPACITY = 4;
 
@@ -103,15 +109,27 @@ class EspIdfEspNowEncryptedRadio {
   PeerIndex peer_index(const char *destination_id) const;
 
  protected:
+  enum class WiFiArbitrationState : uint8_t {
+    MONITORING,
+    GRACE,
+    SUPPRESSED,
+    RECONNECT_WINDOW,
+  };
+
   bool initialize_();
   bool add_configured_peer_(PeerIndex peer_index);
   bool refresh_peer_(PeerIndex peer_index, uint32_t now_ms);
   void process_peer_refresh_(uint32_t now_ms);
   void observe_wifi_association_(uint32_t now_ms);
+  void process_wifi_arbitration_(uint32_t now_ms);
+  void schedule_wifi_arbitration_grace_(uint32_t now_ms);
+  void release_wifi_reconnect_suppression_();
   void schedule_radio_recovery_(uint32_t now_ms, const char *reason);
   bool process_radio_recovery_(uint32_t now_ms);
   void shutdown_radio_();
   uint32_t recovery_jitter_ms_() const;
+  uint32_t wifi_arbitration_jitter_ms_(uint32_t span_ms,
+                                       uint32_t salt) const;
   void rollback_initialization_();
   static bool parse_key_(const char *hex, uint8_t *out);
   static bool parse_address_(const char *value, uint8_t *out);
@@ -137,6 +155,7 @@ class EspIdfEspNowEncryptedRadio {
   uint32_t radio_recovery_last_ms_{0};
   uint32_t radio_recovery_success_count_{0};
   uint32_t radio_recovery_failure_count_{0};
+  uint32_t wifi_arbitration_due_ms_{0};
   int32_t last_initialization_error_{0};
   std::atomic<uint32_t> received_frame_count_{0};
   std::atomic<uint32_t> dropped_frame_count_{0};
@@ -162,6 +181,9 @@ class EspIdfEspNowEncryptedRadio {
   bool radio_recovery_pending_{false};
   bool radio_recovery_in_progress_{false};
   bool recovery_permitted_{true};
+  bool wifi_reconnect_suppression_held_{false};
+  WiFiArbitrationState wifi_arbitration_state_{
+      WiFiArbitrationState::MONITORING};
 };
 
 }  // namespace espnow_net_protocol

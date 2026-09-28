@@ -13,6 +13,7 @@
 #include "freertos/task.h"
 
 #include "esphome/core/log.h"
+#include "esphome/components/wifi/wifi_component.h"
 
 namespace esphome {
 namespace espnow_net_protocol {
@@ -95,6 +96,7 @@ void EspIdfEspNowEncryptedRadio::loop(uint32_t now_ms) {
   last_channel_poll_ms_ = now_ms;
 
   this->observe_wifi_association_(now_ms);
+  this->process_wifi_arbitration_(now_ms);
 
   wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
   uint8_t primary = 0;
@@ -264,12 +266,83 @@ void EspIdfEspNowEncryptedRadio::observe_wifi_association_(uint32_t now_ms) {
   if (!wifi_association_known_) {
     wifi_association_known_ = true;
     wifi_associated_ = associated;
+    if (!associated) this->schedule_wifi_arbitration_grace_(now_ms);
     return;
   }
   if (associated == wifi_associated_) return;
   wifi_associated_ = associated;
+  if (associated) {
+    this->release_wifi_reconnect_suppression_();
+    wifi_arbitration_state_ = WiFiArbitrationState::MONITORING;
+    wifi_arbitration_due_ms_ = 0;
+  } else {
+    this->schedule_wifi_arbitration_grace_(now_ms);
+  }
   this->schedule_radio_recovery_(
       now_ms, associated ? "wifi_reconnected" : "wifi_disconnected");
+}
+
+void EspIdfEspNowEncryptedRadio::schedule_wifi_arbitration_grace_(
+    uint32_t now_ms) {
+  this->release_wifi_reconnect_suppression_();
+  wifi_arbitration_state_ = WiFiArbitrationState::GRACE;
+  wifi_arbitration_due_ms_ =
+      now_ms + WIFI_RECONNECT_GRACE_BASE_MS +
+      this->wifi_arbitration_jitter_ms_(
+          WIFI_RECONNECT_GRACE_JITTER_MS, 0x47524143UL);
+  ESP_LOGI(TAG, "WiFi reconnect grace scheduled delay=%u channel=%u",
+           static_cast<unsigned>(wifi_arbitration_due_ms_ - now_ms),
+           static_cast<unsigned>(expected_channel_));
+}
+
+void EspIdfEspNowEncryptedRadio::process_wifi_arbitration_(uint32_t now_ms) {
+  if (!wifi_association_known_ || wifi_associated_ ||
+      wifi::global_wifi_component == nullptr)
+    return;
+  if (static_cast<int32_t>(now_ms - wifi_arbitration_due_ms_) < 0) return;
+
+  switch (wifi_arbitration_state_) {
+    case WiFiArbitrationState::MONITORING:
+      this->schedule_wifi_arbitration_grace_(now_ms);
+      break;
+    case WiFiArbitrationState::GRACE:
+    case WiFiArbitrationState::RECONNECT_WINDOW:
+      if (wifi::global_wifi_component->request_reconnect_suppression(
+              expected_channel_)) {
+        wifi_reconnect_suppression_held_ = true;
+        wifi_arbitration_state_ = WiFiArbitrationState::SUPPRESSED;
+        wifi_arbitration_due_ms_ =
+            now_ms + WIFI_RECONNECT_HOLD_BASE_MS +
+            this->wifi_arbitration_jitter_ms_(
+                WIFI_RECONNECT_HOLD_JITTER_MS, 0x484F4C44UL);
+        ESP_LOGI(TAG,
+                 "WiFi reconnect suppressed channel=%u hold=%u",
+                 static_cast<unsigned>(expected_channel_),
+                 static_cast<unsigned>(wifi_arbitration_due_ms_ - now_ms));
+      } else {
+        wifi_arbitration_due_ms_ =
+            now_ms + WIFI_RECONNECT_REQUEST_RETRY_MS;
+        ESP_LOGW(TAG,
+                 "WiFi reconnect suppression deferred channel=%u retry=%u",
+                 static_cast<unsigned>(expected_channel_),
+                 static_cast<unsigned>(WIFI_RECONNECT_REQUEST_RETRY_MS));
+      }
+      break;
+    case WiFiArbitrationState::SUPPRESSED:
+      this->release_wifi_reconnect_suppression_();
+      wifi_arbitration_state_ = WiFiArbitrationState::RECONNECT_WINDOW;
+      wifi_arbitration_due_ms_ = now_ms + WIFI_RECONNECT_WINDOW_MS;
+      ESP_LOGI(TAG, "WiFi reconnect window opened duration=%u",
+               static_cast<unsigned>(WIFI_RECONNECT_WINDOW_MS));
+      break;
+  }
+}
+
+void EspIdfEspNowEncryptedRadio::release_wifi_reconnect_suppression_() {
+  if (!wifi_reconnect_suppression_held_) return;
+  if (wifi::global_wifi_component != nullptr)
+    wifi::global_wifi_component->release_reconnect_suppression();
+  wifi_reconnect_suppression_held_ = false;
 }
 
 void EspIdfEspNowEncryptedRadio::schedule_radio_recovery_(
@@ -337,6 +410,19 @@ uint32_t EspIdfEspNowEncryptedRadio::recovery_jitter_ms_() const {
   return RADIO_RECOVERY_JITTER_MS == 0
              ? 0
              : hash % (RADIO_RECOVERY_JITTER_MS + 1U);
+}
+
+uint32_t EspIdfEspNowEncryptedRadio::wifi_arbitration_jitter_ms_(
+    uint32_t span_ms, uint32_t salt) const {
+  if (span_ms == 0) return 0;
+  uint8_t address[EspNowEncryptedPeer::MAC_SIZE]{};
+  if (esp_wifi_get_mac(WIFI_IF_STA, address) != ESP_OK) return span_ms / 2U;
+  uint32_t hash = 2166136261UL ^ salt;
+  for (uint8_t value : address) {
+    hash ^= value;
+    hash *= 16777619UL;
+  }
+  return hash % (span_ms + 1U);
 }
 
 void EspIdfEspNowEncryptedRadio::rollback_initialization_() {

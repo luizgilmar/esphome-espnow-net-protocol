@@ -5,7 +5,7 @@ from esphome.components.esp32 import (
     include_builtin_idf_component,
 )
 from esphome import automation
-from esphome.components import light
+from esphome.components import light, wifi
 from esphome.const import (
     CONF_CHANNEL,
     CONF_ID,
@@ -15,6 +15,7 @@ from esphome.const import (
 )
 
 CODEOWNERS = ["@project-maintainers"]
+DEPENDENCIES = ["wifi"]
 CONF_PMK = "pmk"
 CONF_PEERS = "peers"
 CONF_ADDRESS = "address"
@@ -168,6 +169,7 @@ CONFIG_SCHEMA = cv.All(
 )
 
 async def to_code(config):
+    wifi.enable_runtime_reconnect_suppression()
     cg.add_define("USE_ESPNOW_NET_PROTOCOL_RADIO")
     include_builtin_idf_component("esp_wifi")
     include_builtin_idf_component("esp_system")
