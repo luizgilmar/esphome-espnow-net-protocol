@@ -299,6 +299,21 @@ void EspIdfEspNowEncryptedRadio::process_wifi_arbitration_(uint32_t now_ms) {
   if (!wifi_association_known_ || wifi_associated_ ||
       wifi::global_wifi_component == nullptr)
     return;
+
+  if (wifi_arbitration_state_ == WiFiArbitrationState::REQUESTING &&
+      wifi::global_wifi_component->is_reconnect_suppression_active()) {
+    wifi_arbitration_state_ = WiFiArbitrationState::SUPPRESSED;
+    wifi_arbitration_due_ms_ =
+        now_ms + WIFI_RECONNECT_HOLD_BASE_MS +
+        this->wifi_arbitration_jitter_ms_(
+            WIFI_RECONNECT_HOLD_JITTER_MS, 0x484F4C44UL);
+    // A channel observed during a scan is not proof of a stable radio.
+    channel_stable_ = false;
+    ESP_LOGI(TAG, "WiFi reconnect suppression confirmed channel=%u hold=%u",
+             static_cast<unsigned>(expected_channel_),
+             static_cast<unsigned>(wifi_arbitration_due_ms_ - now_ms));
+    return;
+  }
   if (static_cast<int32_t>(now_ms - wifi_arbitration_due_ms_) < 0) return;
 
   switch (wifi_arbitration_state_) {
@@ -310,13 +325,10 @@ void EspIdfEspNowEncryptedRadio::process_wifi_arbitration_(uint32_t now_ms) {
       if (wifi::global_wifi_component->request_reconnect_suppression(
               expected_channel_)) {
         wifi_reconnect_suppression_held_ = true;
-        wifi_arbitration_state_ = WiFiArbitrationState::SUPPRESSED;
-        wifi_arbitration_due_ms_ =
-            now_ms + WIFI_RECONNECT_HOLD_BASE_MS +
-            this->wifi_arbitration_jitter_ms_(
-                WIFI_RECONNECT_HOLD_JITTER_MS, 0x484F4C44UL);
+        wifi_arbitration_state_ = WiFiArbitrationState::REQUESTING;
+        wifi_arbitration_due_ms_ = now_ms + WIFI_RECONNECT_REQUEST_RETRY_MS;
         ESP_LOGI(TAG,
-                 "WiFi reconnect suppressed channel=%u hold=%u",
+                 "WiFi reconnect suppression requested channel=%u confirmation_timeout=%u",
                  static_cast<unsigned>(expected_channel_),
                  static_cast<unsigned>(wifi_arbitration_due_ms_ - now_ms));
       } else {
@@ -327,6 +339,12 @@ void EspIdfEspNowEncryptedRadio::process_wifi_arbitration_(uint32_t now_ms) {
                  static_cast<unsigned>(expected_channel_),
                  static_cast<unsigned>(WIFI_RECONNECT_REQUEST_RETRY_MS));
       }
+      break;
+    case WiFiArbitrationState::REQUESTING:
+      ESP_LOGW(TAG, "WiFi reconnect suppression not confirmed; reopening reconnect window");
+      this->release_wifi_reconnect_suppression_();
+      wifi_arbitration_state_ = WiFiArbitrationState::RECONNECT_WINDOW;
+      wifi_arbitration_due_ms_ = now_ms + WIFI_RECONNECT_WINDOW_MS;
       break;
     case WiFiArbitrationState::SUPPRESSED:
       this->release_wifi_reconnect_suppression_();

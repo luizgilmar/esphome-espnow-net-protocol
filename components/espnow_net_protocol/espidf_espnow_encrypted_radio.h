@@ -112,6 +112,7 @@ class EspIdfEspNowEncryptedRadio {
   enum class WiFiArbitrationState : uint8_t {
     MONITORING,
     GRACE,
+    REQUESTING,
     SUPPRESSED,
     RECONNECT_WINDOW,
   };
