@@ -1,5 +1,8 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+#ifdef USE_LIGHT
+
 #include "esphome/components/light/light_state.h"
 
 #include "command_completion_probe.h"
@@ -51,3 +54,4 @@ class LightCommandCompletionProbe final : public CommandCompletionProbe {
 
 }  // namespace espnow_net_protocol
 }  // namespace esphome
+#endif  // USE_LIGHT
