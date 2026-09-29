@@ -102,17 +102,17 @@ RadioDiagnosticSample RadioDiagnostics::capture_(uint32_t now, const EspIdfEspNo
 }
 
 void RadioDiagnostics::log_sample_(const char *source, const RadioDiagnosticSample &s) const {
-  auto bit = [&](uint16_t flag) -> unsigned { return (s.flags & flag) != 0; };
+  auto flag_value = [&](uint16_t flag) -> unsigned { return (s.flags & flag) != 0; };
   ESP_LOGI(TAG,
       "%s up=%u drv=%u sta=%u assoc=%u net=%u api=%u mqtt=%u mode=%u ch=%u/%d "
       "wifi=%u arb=%u req=%u held=%u now=%u rec=%u/%u/%u reason=%u "
       "rx=%u tx=%u fail=%u stops=%u gap=%u init_err=%d ap_err=%d",
-      source, static_cast<unsigned>(s.uptime_ms), bit(DRIVER_STARTED), bit(STA_STARTED),
-      bit(ASSOCIATED), bit(WIFI_CONNECTED), bit(API_CONNECTED), bit(MQTT_CONNECTED),
+      source, static_cast<unsigned>(s.uptime_ms), flag_value(DRIVER_STARTED), flag_value(STA_STARTED),
+      flag_value(ASSOCIATED), flag_value(WIFI_CONNECTED), flag_value(API_CONNECTED), flag_value(MQTT_CONNECTED),
       static_cast<unsigned>(s.mode), static_cast<unsigned>(s.channel), static_cast<int>(s.channel_error),
       static_cast<unsigned>(s.wifi_state), static_cast<unsigned>(s.arbitration),
-      bit(SUPPRESSION_REQUESTED), bit(SUPPRESSION_ACTIVE), bit(ESPNOW_INITIALIZED),
-      bit(RECOVERY_PENDING), bit(RECOVERY_RUNNING), bit(RECOVERY_PERMITTED),
+      flag_value(SUPPRESSION_REQUESTED), flag_value(SUPPRESSION_ACTIVE), flag_value(ESPNOW_INITIALIZED),
+      flag_value(RECOVERY_PENDING), flag_value(RECOVERY_RUNNING), flag_value(RECOVERY_PERMITTED),
       static_cast<unsigned>(s.disconnect_reason), static_cast<unsigned>(s.rx),
       static_cast<unsigned>(s.tx), static_cast<unsigned>(s.failed), static_cast<unsigned>(s.stops),
       static_cast<unsigned>(s.max_loop_gap_ms), static_cast<int>(s.init_error), static_cast<int>(s.association_error));

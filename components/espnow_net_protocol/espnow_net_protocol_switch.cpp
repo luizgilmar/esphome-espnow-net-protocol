@@ -1,5 +1,6 @@
 #include "espnow_net_protocol_switch.h"
 
+#ifdef USE_SWITCH
 #include "esphome/core/log.h"
 
 namespace esphome {
@@ -30,3 +31,4 @@ void EspNowNetProtocolSwitch::write_state(bool state) {
 
 }  // namespace espnow_net_protocol
 }  // namespace esphome
+#endif  // USE_SWITCH

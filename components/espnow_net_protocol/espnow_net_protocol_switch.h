@@ -1,5 +1,8 @@
 #pragma once
 
+#include "esphome/core/defines.h"
+#ifdef USE_SWITCH
+
 #include "esphome/components/switch/switch.h"
 #include "esphome/core/component.h"
 
@@ -22,3 +25,4 @@ class EspNowNetProtocolSwitch : public switch_::Switch, public Component {
 
 }  // namespace espnow_net_protocol
 }  // namespace esphome
+#endif  // USE_SWITCH
