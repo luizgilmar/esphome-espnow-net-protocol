@@ -290,12 +290,23 @@ void EspIdfEspNowEncryptedRadio::observe_wifi_association_(uint32_t now_ms) {
   } else {
     this->schedule_wifi_arbitration_grace_(now_ms);
   }
+#ifdef USE_WIFI_FIXED_CHANNEL
+  if (wifi::global_wifi_component != nullptr && wifi::global_wifi_component->fixed_channel_operation())
+    return;
+#endif
   this->schedule_radio_recovery_(
       now_ms, associated ? "wifi_reconnected" : "wifi_disconnected");
 }
 
 void EspIdfEspNowEncryptedRadio::schedule_wifi_arbitration_grace_(
     uint32_t now_ms) {
+#ifdef USE_WIFI_FIXED_CHANNEL
+  if (wifi::global_wifi_component != nullptr) {
+    this->release_wifi_reconnect_suppression_();
+    wifi_arbitration_state_ = WiFiArbitrationState::MONITORING;
+    return;
+  }
+#endif
   this->release_wifi_reconnect_suppression_();
   wifi_arbitration_state_ = WiFiArbitrationState::GRACE;
   wifi_arbitration_due_ms_ =
@@ -308,6 +319,11 @@ void EspIdfEspNowEncryptedRadio::schedule_wifi_arbitration_grace_(
 }
 
 void EspIdfEspNowEncryptedRadio::process_wifi_arbitration_(uint32_t now_ms) {
+#ifdef USE_WIFI_FIXED_CHANNEL
+  // Fixed-channel operation and explicit provisioning own Wi-Fi policy.
+  this->release_wifi_reconnect_suppression_();
+  return;
+#endif
   if (!wifi_association_known_ || wifi_associated_ ||
       wifi::global_wifi_component == nullptr)
     return;

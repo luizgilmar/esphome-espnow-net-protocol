@@ -218,6 +218,7 @@ class EspNowNetProtocolComponent : public Component,
   EspIdfEspNowEncryptedRadio radio_{};
 #ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
   RadioDiagnostics diagnostics_{};
+  uint32_t diagnostic_radio_probe_ms_{0};
 #endif
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};

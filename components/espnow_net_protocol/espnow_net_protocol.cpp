@@ -224,7 +224,17 @@ void EspNowNetProtocolComponent::loop() {
   recovery_permitted &= command_client_state_2_ == CommandClientState::IDLE;
 #endif
   radio_.set_recovery_permitted(recovery_permitted);
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  const bool trace_radio = now_ms - diagnostic_radio_probe_ms_ >= 5000U;
+  if (trace_radio) {
+    diagnostic_radio_probe_ms_ = now_ms;
+    ESP_LOGI("radio_diag", "probe before radio loop up=%u", unsigned(now_ms));
+  }
+#endif
   radio_.loop(now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  if (trace_radio) ESP_LOGI("radio_diag", "probe radio loop complete");
+#endif
   // Must run even when radio initialization fails or the protocol is disabled.
 #ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
   diagnostics_.loop(now_ms, radio_);

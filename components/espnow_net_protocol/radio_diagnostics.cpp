@@ -56,6 +56,8 @@ void RadioDiagnostics::setup() {
 }
 
 RadioDiagnosticSample RadioDiagnostics::capture_(uint32_t now, const EspIdfEspNowEncryptedRadio &radio) {
+  const bool trace = now - last_probe_log_ >= 5000U;
+  if (trace) last_probe_log_ = now;
   RadioDiagnosticSample s{};
   s.uptime_ms = now;
   s.max_loop_gap_ms = max_loop_gap_;
@@ -73,15 +75,30 @@ RadioDiagnosticSample RadioDiagnostics::capture_(uint32_t now, const EspIdfEspNo
     if (w->is_reconnect_suppression_active()) s.flags |= SUPPRESSION_ACTIVE;
   }
   wifi_mode_t mode = WIFI_MODE_NULL;
+  if (trace) ESP_LOGI(TAG, "probe before get_mode up=%u", unsigned(now));
   if (esp_wifi_get_mode(&mode) == ESP_OK) {
     s.mode = static_cast<uint8_t>(mode);
     s.flags |= MODE_VALID;
   }
   wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
+  if (trace) ESP_LOGI(TAG, "probe before get_channel");
   s.channel_error = esp_wifi_get_channel(&s.channel, &secondary);
   if (s.channel_error != ESP_OK) s.channel = 0;
   wifi_ap_record_t ap{};
+  if (trace) ESP_LOGI(TAG, "probe before get_ap_info");
   s.association_error = esp_wifi_sta_get_ap_info(&ap);
+  if (trace) ESP_LOGI(TAG, "probe driver queries complete");
+#ifdef USE_WIFI_FIXED_CHANNEL
+  if (trace) {
+    wifi_country_t country{};
+    ESP_LOGI(TAG, "probe before get_country");
+    const esp_err_t country_error = esp_wifi_get_country(&country);
+    ESP_LOGI(TAG, "FC1 range start=%u count=%u manual=%u error=%d configuration=%u",
+             unsigned(country.schan), unsigned(country.nchan),
+             unsigned(country.policy == WIFI_COUNTRY_POLICY_MANUAL), int(country_error),
+             unsigned(w != nullptr && w->network_configuration_mode()));
+  }
+#endif
   if (s.association_error == ESP_OK) s.flags |= ASSOCIATED;
 #ifdef USE_API
   if (api::global_api_server != nullptr && api::global_api_server->is_connected()) s.flags |= API_CONNECTED;

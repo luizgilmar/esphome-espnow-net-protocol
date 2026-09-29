@@ -25,6 +25,7 @@ class RadioDiagnostics {
   ESPPreferenceObject preference_{};
   uint32_t last_poll_{0}, last_sample_{0}, last_loop_{0}, max_loop_gap_{0};
   uint32_t replay_due_{0};
+  uint32_t last_probe_log_{0};
   uint16_t replay_index_{0};
   uint8_t replay_phase_{0}; // 0 idle, 1 saved boot, 2 current boot
   bool initialized_{false}, sampled_{false}, dump_pending_{false}, saved_{false};
