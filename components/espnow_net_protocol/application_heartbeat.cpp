@@ -1,0 +1,97 @@
+#include "esphome/core/defines.h"
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+#include "espnow_net_protocol.h"
+#include "esphome/core/log.h"
+
+namespace esphome::espnow_net_protocol {
+static const char *const HB_TAG = "espnow.hb";
+
+bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &received, uint32_t now) {
+  const auto &bytes = received.frame.data;
+  if (!HeartbeatPacket::has_magic(bytes.data(), bytes.size())) return false;
+  // A heartbeat may only use the explicitly configured peer. No command handler,
+  // relay, result observer, or production transaction sees these packets.
+  HeartbeatPacket packet{};
+  if (received.peer_index != heartbeat_peer_ || !HeartbeatPacket::decode(bytes.data(), bytes.size(), packet))
+    return true;
+  if (packet.kind == 1) {
+    // One bounded reply slot; later requests never overwrite a pending response.
+    if (!heartbeat_reply_pending_) {
+      heartbeat_reply_ = packet;
+      heartbeat_reply_.kind = 2;
+      heartbeat_reply_.responder_boot = local_boot_id_;
+      heartbeat_reply_received_ = now;
+      heartbeat_reply_pending_ = true;
+      ESP_LOGI(HB_TAG, "HB1 received PING seq=%u peer=%u", unsigned(packet.sequence), unsigned(received.peer_index));
+    }
+  } else {
+    uint32_t rtt = 0;
+    if (heartbeat_exchange_.accept(packet, now, rtt)) {
+      ++heartbeat_ok_;
+      ESP_LOGI(HB_TAG, "HB1 PONG seq=%u rtt_ms=%u sent=%u ok=%u timeout=%u send_error=%u responder_boot=%llu",
+               unsigned(packet.sequence), unsigned(rtt), unsigned(heartbeat_sent_), unsigned(heartbeat_ok_),
+               unsigned(heartbeat_lost_), unsigned(heartbeat_send_errors_),
+               static_cast<unsigned long long>(packet.responder_boot));
+    } else {
+      ESP_LOGD(HB_TAG, "HB1 ignored stale/duplicate/unmatched PONG seq=%u", unsigned(packet.sequence));
+    }
+  }
+  return true;
+}
+
+void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
+  if (heartbeat_exchange_.expired(now)) {
+    heartbeat_exchange_.reset();
+    ++heartbeat_lost_;
+    ESP_LOGW(HB_TAG, "HB1 TIMEOUT seq=%u sent=%u ok=%u timeout=%u send_error=%u",
+             unsigned(heartbeat_sequence_), unsigned(heartbeat_sent_), unsigned(heartbeat_ok_),
+             unsigned(heartbeat_lost_), unsigned(heartbeat_send_errors_));
+  }
+  if (heartbeat_reply_pending_ && uint32_t(now - heartbeat_reply_received_) >= heartbeat_timeout_) {
+    heartbeat_reply_pending_ = false;
+    ESP_LOGW(HB_TAG, "HB1 reply expired while transmitter busy");
+  }
+}
+
+void EspNowNetProtocolComponent::dispatch_heartbeat_(uint32_t now) {
+  if (heartbeat_peer_ == INVALID_PEER_INDEX || radio_transmission_owner_ != RadioTransmissionOwner::NONE ||
+      reliable_message_owner_ != ReliableMessageOwner::NONE || sender_.state() != ReliableSenderState::IDLE)
+    return; // Production messages have priority; heartbeat never takes their ownership.
+  if (heartbeat_reply_pending_) {
+    uint8_t payload[HeartbeatPacket::SIZE];
+    heartbeat_reply_.encode(payload);
+    heartbeat_reply_pending_ = false;
+    if (radio_.send_frame(heartbeat_peer_, payload, sizeof(payload))) {
+      radio_transmission_owner_ = RadioTransmissionOwner::HEARTBEAT;
+      radio_transmission_peer_ = heartbeat_peer_;
+      ESP_LOGI(HB_TAG, "HB1 sent PONG seq=%u", unsigned(heartbeat_reply_.sequence));
+    } else {
+      ESP_LOGW(HB_TAG, "HB1 reply send rejected seq=%u", unsigned(heartbeat_reply_.sequence));
+    }
+    return;
+  }
+  if (!heartbeat_interval_ || heartbeat_exchange_.pending() ||
+      uint32_t(now - heartbeat_last_attempt_) < heartbeat_interval_) return;
+  heartbeat_last_attempt_ = now;
+  ++heartbeat_sequence_;
+  if (!heartbeat_sequence_) ++heartbeat_sequence_;
+  HeartbeatPacket ping{};
+  ping.requester_boot = local_boot_id_;
+  ping.sequence = heartbeat_sequence_;
+  uint8_t payload[HeartbeatPacket::SIZE];
+  ping.encode(payload);
+  ++heartbeat_sent_;
+  if (!radio_.send_frame(heartbeat_peer_, payload, sizeof(payload))) {
+    ++heartbeat_send_errors_;
+    ESP_LOGW(HB_TAG, "HB1 SEND_ERROR seq=%u sent=%u ok=%u timeout=%u send_error=%u",
+             unsigned(heartbeat_sequence_), unsigned(heartbeat_sent_), unsigned(heartbeat_ok_),
+             unsigned(heartbeat_lost_), unsigned(heartbeat_send_errors_));
+    return;
+  }
+  heartbeat_exchange_.start(ping, now, heartbeat_timeout_);
+  radio_transmission_owner_ = RadioTransmissionOwner::HEARTBEAT;
+  radio_transmission_peer_ = heartbeat_peer_;
+  ESP_LOGI(HB_TAG, "HB1 sent PING seq=%u peer=%u", unsigned(heartbeat_sequence_), unsigned(heartbeat_peer_));
+}
+} // namespace esphome::espnow_net_protocol
+#endif

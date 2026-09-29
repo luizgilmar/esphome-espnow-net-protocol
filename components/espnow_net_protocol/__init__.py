@@ -152,10 +152,30 @@ def _validate(config):
             routes.add(route)
     return config
 
+def _validate_heartbeat(config):
+    hb = config.get("heartbeat")
+    if hb is None:
+        return config
+    if hb["peer"] not in {peer["id"] for peer in config["peers"]}:
+        raise cv.Invalid("heartbeat.peer must name a configured ESP-NOW peer")
+    timeout = hb["timeout"].total_milliseconds
+    interval = hb["send_interval"].total_milliseconds
+    if not 100 <= timeout <= 60000:
+        raise cv.Invalid("heartbeat.timeout must be between 100ms and 60s")
+    if interval != 0 and not timeout < interval <= 3600000:
+        raise cv.Invalid("heartbeat.send_interval must be 0s (responder), or greater than timeout and at most 1h")
+    return config
+
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(EspNowNetProtocolComponent),
         cv.Optional(CONF_DIAGNOSTICS, default=False): cv.boolean,
+        cv.Optional("heartbeat"): cv.Schema({
+            cv.Required("peer"): cv.string_strict,
+            cv.Optional("send_interval", default="0s"): cv.positive_time_period_milliseconds,
+            cv.Optional("timeout", default="2s"): cv.positive_time_period_milliseconds,
+        }),
         cv.Required(CONF_CHANNEL): cv.int_range(min=1, max=14),
         cv.Required(CONF_PMK): _key,
         cv.Required(CONF_PEERS): cv.All(
@@ -168,6 +188,7 @@ CONFIG_SCHEMA = cv.All(
         cv.Optional(CONF_INBOUND): INBOUND_SCHEMA,
     }).extend(cv.COMPONENT_SCHEMA),
     _validate,
+    _validate_heartbeat,
 )
 
 async def to_code(config):
@@ -191,6 +212,11 @@ async def to_code(config):
     cg.add(var.configure(config[CONF_CHANNEL], config[CONF_PMK]))
     for peer in config[CONF_PEERS]:
         cg.add(var.add_peer(peer[CONF_ID], peer[CONF_ADDRESS], peer[CONF_LMK]))
+    if "heartbeat" in config:
+        cg.add_define("USE_ESPNOW_APPLICATION_HEARTBEAT")
+        hb = config["heartbeat"]
+        cg.add(var.configure_heartbeat(hb["peer"], hb["send_interval"].total_milliseconds,
+                                       hb["timeout"].total_milliseconds))
     if any(CONF_APPLICATION_SOURCE_ID in peer for peer in config[CONF_PEERS]):
         cg.add_define("USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION")
         if CONF_INBOUND not in config:

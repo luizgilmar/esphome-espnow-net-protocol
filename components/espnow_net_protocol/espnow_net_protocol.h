@@ -18,6 +18,9 @@
 #endif
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+#include "application_heartbeat.h"
+#endif
 #include "result_codec.h"
 
 namespace esphome {
@@ -52,6 +55,13 @@ class EspNowNetProtocolComponent : public Component,
   bool add_peer(const char *id, const char *address, const char *lmk_hex) {
     return radio_.add_peer(id, address, lmk_hex);
   }
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  void configure_heartbeat(const char *peer, uint32_t interval_ms, uint32_t timeout_ms) {
+    heartbeat_peer_ = radio_.peer_index(peer);
+    heartbeat_interval_ = interval_ms;
+    heartbeat_timeout_ = timeout_ms;
+  }
+#endif
   PeerIndex peer_index(const char *id) const { return radio_.peer_index(id); }
   bool send_frame(PeerIndex peer, const uint8_t *data, size_t size) {
     return radio_.send_frame(peer, data, size);
@@ -207,7 +217,19 @@ class EspNowNetProtocolComponent : public Component,
 #endif
 
  protected:
-  enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK };
+  enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK, HEARTBEAT };
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  bool receive_heartbeat_(const EspNowReceivedFrame &received, uint32_t now);
+  void heartbeat_tick_(uint32_t now);
+  void dispatch_heartbeat_(uint32_t now);
+  PeerIndex heartbeat_peer_{INVALID_PEER_INDEX};
+  HeartbeatExchange heartbeat_exchange_{};
+  HeartbeatPacket heartbeat_reply_{};
+  bool heartbeat_reply_pending_{false};
+  uint32_t heartbeat_interval_{0}, heartbeat_timeout_{1500};
+  uint32_t heartbeat_last_attempt_{0}, heartbeat_reply_received_{0}, heartbeat_sequence_{0};
+  uint32_t heartbeat_sent_{0}, heartbeat_ok_{0}, heartbeat_lost_{0}, heartbeat_send_errors_{0};
+#endif
   enum class ReliableMessageOwner : uint8_t {
     NONE,
     API_CALLER,

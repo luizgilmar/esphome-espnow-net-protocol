@@ -72,6 +72,10 @@ void EspNowNetProtocolComponent::set_runtime_enabled(bool enabled) {
   if (runtime_enabled_ == enabled) return;
   runtime_enabled_ = enabled;
   if (!enabled) {
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+    heartbeat_exchange_.reset();
+    heartbeat_reply_pending_ = false;
+#endif
     sender_.reset();
     reliable_message_owner_ = ReliableMessageOwner::NONE;
     if (command_client_state_ != CommandClientState::IDLE)
@@ -206,6 +210,15 @@ void EspNowNetProtocolComponent::setup() {
 #endif
   local_boot_id_ = (static_cast<uint64_t>(esp_random()) << 32U) | esp_random();
   if (local_boot_id_ == 0) local_boot_id_ = 1;
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  if (heartbeat_peer_ == INVALID_PEER_INDEX) {
+    ESP_LOGE("espnow.hb", "HB1 invalid configured peer");
+    mark_failed();
+  }
+  ESP_LOGI("espnow.hb", "HB1 ready peer=%u interval=%u timeout=%u boot=%llu",
+           unsigned(heartbeat_peer_), unsigned(heartbeat_interval_), unsigned(heartbeat_timeout_),
+           static_cast<unsigned long long>(local_boot_id_));
+#endif
   if (!runtime_.configure(local_boot_id_) ||
       !sender_.configure(local_boot_id_, retry_policy_)) {
     ESP_LOGE(TAG, "Failed to configure protocol runtime");
@@ -239,6 +252,9 @@ void EspNowNetProtocolComponent::loop() {
 #ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
   diagnostics_.loop(now_ms, radio_);
 #endif
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  heartbeat_tick_(now_ms);
+#endif
   if (!radio_.initialized() || is_failed()) return;
   if (!runtime_enabled_) {
     discard_radio_events_();
@@ -270,6 +286,9 @@ void EspNowNetProtocolComponent::loop() {
   process_dispatcher_(now_ms);
   dispatch_application_ack_();
   dispatch_sender_frame_(now_ms);
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  dispatch_heartbeat_(now_ms);
+#endif
 }
 
 void EspNowNetProtocolComponent::process_application_message_(
@@ -620,6 +639,9 @@ void EspNowNetProtocolComponent::process_send_completion_(uint32_t now_ms) {
 void EspNowNetProtocolComponent::process_received_frame_() {
   EspNowReceivedFrame received{};
   if (!radio_.take_received_frame(received)) return;
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  if (receive_heartbeat_(received, millis())) return;
+#endif
   const EspNowProtocolAcceptResult accepted = runtime_.accept(received);
   if (accepted == EspNowProtocolAcceptResult::DELIVERY_ACK_READY) {
     EspNowAckPayload ack{};
