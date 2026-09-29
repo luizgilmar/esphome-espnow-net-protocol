@@ -16,6 +16,7 @@ from esphome.const import (
 
 CODEOWNERS = ["@project-maintainers"]
 DEPENDENCIES = ["wifi"]
+CONF_DIAGNOSTICS = "diagnostics"
 CONF_PMK = "pmk"
 CONF_PEERS = "peers"
 CONF_ADDRESS = "address"
@@ -154,6 +155,7 @@ def _validate(config):
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(EspNowNetProtocolComponent),
+        cv.Optional(CONF_DIAGNOSTICS, default=False): cv.boolean,
         cv.Required(CONF_CHANNEL): cv.int_range(min=1, max=14),
         cv.Required(CONF_PMK): _key,
         cv.Required(CONF_PEERS): cv.All(
@@ -170,6 +172,9 @@ CONFIG_SCHEMA = cv.All(
 
 async def to_code(config):
     wifi.enable_runtime_reconnect_suppression()
+    if config[CONF_DIAGNOSTICS]:
+        cg.add_define("USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS")
+        cg.add_define("USE_WIFI_RADIO_DIAGNOSTICS")
     cg.add_define("USE_ESPNOW_NET_PROTOCOL_RADIO")
     include_builtin_idf_component("esp_wifi")
     include_builtin_idf_component("esp_system")

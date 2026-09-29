@@ -59,6 +59,11 @@ class EspIdfEspNowEncryptedRadio {
   bool channel_matches() const { return channel_matches_; }
   uint8_t expected_channel() const { return expected_channel_; }
   uint8_t current_channel() const { return current_channel_; }
+  uint8_t diagnostic_arbitration_state() const { return static_cast<uint8_t>(wifi_arbitration_state_); }
+  bool diagnostic_recovery_pending() const { return radio_recovery_pending_; }
+  bool diagnostic_recovery_in_progress() const { return radio_recovery_in_progress_; }
+  bool diagnostic_recovery_permitted() const { return recovery_permitted_; }
+  int32_t diagnostic_initialization_error() const { return last_initialization_error_; }
   size_t peer_count() const { return peers_.size(); }
   uint32_t received_frame_count() const {
     return received_frame_count_.load(std::memory_order_relaxed);

@@ -13,6 +13,9 @@
 #include "light_command_completion_probe.h"
 #endif
 #include "espidf_espnow_encrypted_radio.h"
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+#include "radio_diagnostics.h"
+#endif
 #include "protocol_runtime.h"
 #include "reliable_sender.h"
 #include "result_codec.h"
@@ -198,6 +201,10 @@ class EspNowNetProtocolComponent : public Component,
   void setup() override;
   void loop() override;
   void dump_config() override;
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  void on_safe_shutdown() override { diagnostics_.save_before_shutdown(radio_); }
+  void on_shutdown() override { diagnostics_.save_before_shutdown(radio_); }
+#endif
 
  protected:
   enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK };
@@ -209,6 +216,9 @@ class EspNowNetProtocolComponent : public Component,
     BACKGROUND_RESULT,
   };
   EspIdfEspNowEncryptedRadio radio_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  RadioDiagnostics diagnostics_{};
+#endif
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
   InboundCommandDispatcher command_dispatcher_{};

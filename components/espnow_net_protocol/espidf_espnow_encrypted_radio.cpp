@@ -14,11 +14,22 @@
 
 #include "esphome/core/log.h"
 #include "esphome/components/wifi/wifi_component.h"
+#include "esphome/components/wifi/radio_diagnostics.h"
 
 namespace esphome {
 namespace espnow_net_protocol {
 
 static const char *const TAG = "espnow_net_protocol.radio";
+
+static void record_diagnostic(wifi::RadioDiagnosticEventKind kind, int32_t result = 0) {
+#ifdef USE_WIFI_RADIO_DIAGNOSTICS
+  if (wifi::global_wifi_component != nullptr)
+    wifi::global_wifi_component->record_radio_diagnostic_event(kind, result);
+#else
+  (void) kind;
+  (void) result;
+#endif
+}
 
 EspIdfEspNowEncryptedRadio *EspIdfEspNowEncryptedRadio::instance_ = nullptr;
 
@@ -153,6 +164,7 @@ bool EspIdfEspNowEncryptedRadio::initialize_() {
     return false;
   }
   esp_err_t result = esp_now_init();
+  record_diagnostic(wifi::RadioDiagnosticEventKind::ESPNOW_INIT_RESULT, result);
   last_initialization_error_ = result;
   if (result != ESP_OK) return false;
   instance_ = this;
@@ -402,7 +414,9 @@ void EspIdfEspNowEncryptedRadio::shutdown_radio_() {
   if (initialized_ || instance_ == this) {
     esp_now_unregister_send_cb();
     esp_now_unregister_recv_cb();
+    record_diagnostic(wifi::RadioDiagnosticEventKind::ESPNOW_DEINIT_CALL);
     result = esp_now_deinit();
+    record_diagnostic(wifi::RadioDiagnosticEventKind::ESPNOW_DEINIT_RESULT, result);
   }
   if (result != ESP_OK) {
     last_initialization_error_ = result;
@@ -444,7 +458,9 @@ uint32_t EspIdfEspNowEncryptedRadio::wifi_arbitration_jitter_ms_(
 }
 
 void EspIdfEspNowEncryptedRadio::rollback_initialization_() {
-  esp_now_deinit();
+  record_diagnostic(wifi::RadioDiagnosticEventKind::ESPNOW_DEINIT_CALL);
+  const esp_err_t result = esp_now_deinit();
+  record_diagnostic(wifi::RadioDiagnosticEventKind::ESPNOW_DEINIT_RESULT, result);
   if (instance_ == this) instance_ = nullptr;
   initialized_ = false;
 }

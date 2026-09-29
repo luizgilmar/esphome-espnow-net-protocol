@@ -201,6 +201,9 @@ bool EspNowNetProtocolComponent::cancel_command(TransactionId transaction_id) {
 }
 
 void EspNowNetProtocolComponent::setup() {
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  diagnostics_.setup();
+#endif
   local_boot_id_ = (static_cast<uint64_t>(esp_random()) << 32U) | esp_random();
   if (local_boot_id_ == 0) local_boot_id_ = 1;
   if (!runtime_.configure(local_boot_id_) ||
@@ -222,6 +225,10 @@ void EspNowNetProtocolComponent::loop() {
 #endif
   radio_.set_recovery_permitted(recovery_permitted);
   radio_.loop(now_ms);
+  // Must run even when radio initialization fails or the protocol is disabled.
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  diagnostics_.loop(now_ms, radio_);
+#endif
   if (!radio_.initialized() || is_failed()) return;
   if (!runtime_enabled_) {
     discard_radio_events_();
@@ -663,6 +670,9 @@ void EspNowNetProtocolComponent::discard_radio_events_() {
 }
 
 void EspNowNetProtocolComponent::dump_config() {
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  diagnostics_.request_dump();
+#endif
   ESP_LOGCONFIG(TAG,
                 "ESP-NOW NetProtocol: %s runtime=%s channel=%u current=%u peers=%u "
                 "channel_match=%s rx=%u dropped=%u tx=%u failed=%u "
