@@ -8,6 +8,24 @@
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
 
+void EspNowNetProtocolComponent::diagnostic_peer_trial_phase(const char *phase) {
+  this->log_peer_diagnostics(phase);
+  if (std::strcmp(phase, "wifi_connected") == 0) {
+    peer_trial_attempt_ = false;
+    if (peer_trial_pending_) ESP_LOGI("espnow.peer", "HB5 trial canceled: Wi-Fi recovered");
+    peer_trial_pending_ = false;
+  } else if (std::strcmp(phase, "before_attempt") == 0) {
+    peer_trial_attempt_ = true;
+  } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && peer_trial_attempt_) {
+    peer_trial_attempt_ = false;
+    if (!peer_trial_done_ && !peer_trial_pending_) {
+      peer_trial_pending_ = true;
+      peer_trial_started_ = millis();
+      ESP_LOGI("espnow.peer", "HB5 peer-only trial scheduled in 7000ms; once per boot");
+    }
+  }
+}
+
 void EspNowNetProtocolComponent::diagnostic_callback_trial_phase(const char *phase) {
   this->log_peer_diagnostics(phase);
   if (std::strcmp(phase, "wifi_connected") == 0) {
@@ -93,6 +111,22 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
 }
 
 void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
+  if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 15000U) {
+    peer_trial_pending_ = false;
+    peer_trial_done_ = true;
+    ESP_LOGW("espnow.peer", "HB5 trial canceled: missed idle window; reset bench to repeat");
+  }
+  if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 7000U &&
+      radio_transmission_owner_ == RadioTransmissionOwner::NONE &&
+      reliable_message_owner_ == ReliableMessageOwner::NONE && sender_.state() == ReliableSenderState::IDLE) {
+    peer_trial_pending_ = false;
+    peer_trial_done_ = true;
+    this->log_peer_diagnostics("before_peer_mod");
+    const auto result = radio_.diagnostic_reapply_peer(heartbeat_peer_);
+    ESP_LOGI("espnow.peer", "HB5 peer_reapply result=%d peer=%u; same LMK; no callback registration or deinit",
+             int(result), unsigned(heartbeat_peer_));
+    this->log_peer_diagnostics("after_peer_mod");
+  }
   if (callback_trial_pending_ && uint32_t(now - callback_trial_started_) >= 7000U) {
     callback_trial_pending_ = false;
     callback_trial_done_ = true;

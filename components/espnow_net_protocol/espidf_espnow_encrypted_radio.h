@@ -44,6 +44,7 @@ class EspIdfEspNowEncryptedRadio {
   bool send_frame(const char *destination_id, const uint8_t *data, size_t size);
   bool request_peer_refresh(PeerIndex peer_index);
   esp_err_t diagnostic_reregister_receive_callback();
+  esp_err_t diagnostic_reapply_peer(PeerIndex peer_index);
   bool request_radio_recovery(uint32_t now_ms);
   void set_recovery_permitted(bool permitted) {
     recovery_permitted_ = permitted;

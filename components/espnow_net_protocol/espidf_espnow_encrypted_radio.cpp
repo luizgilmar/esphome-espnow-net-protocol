@@ -235,6 +235,20 @@ esp_err_t EspIdfEspNowEncryptedRadio::diagnostic_reregister_receive_callback() {
   return esp_now_register_recv_cb(receive_callback_);
 }
 
+esp_err_t EspIdfEspNowEncryptedRadio::diagnostic_reapply_peer(PeerIndex peer_index) {
+  if (!initialized_ || instance_ != this) return ESP_ERR_ESPNOW_NOT_INIT;
+  const auto *configured = peers_.peer(peer_index);
+  if (configured == nullptr) return ESP_ERR_ESPNOW_ARG;
+  esp_now_peer_info_t peer{};
+  const auto result = esp_now_get_peer(configured->address, &peer);
+  if (result != ESP_OK) return result;  // Do not add a missing peer in this experiment.
+  std::memcpy(peer.lmk, configured->lmk, sizeof(peer.lmk));
+  peer.channel = 0;
+  peer.ifidx = WIFI_IF_STA;
+  peer.encrypt = true;
+  return esp_now_mod_peer(&peer);
+}
+
 bool EspIdfEspNowEncryptedRadio::refresh_peer_(PeerIndex peer_index,
                                                 uint32_t now_ms) {
   const PeerIdentity *configured_peer = peers_.peer(peer_index);
