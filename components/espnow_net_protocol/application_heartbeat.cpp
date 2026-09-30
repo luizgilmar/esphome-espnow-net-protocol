@@ -12,16 +12,19 @@ void EspNowNetProtocolComponent::diagnostic_peer_trial_phase(const char *phase) 
   this->log_peer_diagnostics(phase);
   if (std::strcmp(phase, "wifi_connected") == 0) {
     peer_trial_attempt_ = false;
-    if (peer_trial_pending_) ESP_LOGI("espnow.peer", "HB5 trial canceled: Wi-Fi recovered");
+    if (peer_trial_pending_) ESP_LOGI("espnow.peer", "HB6 trial canceled: Wi-Fi recovered");
     peer_trial_pending_ = false;
   } else if (std::strcmp(phase, "before_attempt") == 0) {
+    if (peer_trial_pending_) ESP_LOGI("espnow.peer", "HB6 previous trial canceled: next Wi-Fi attempt started");
+    peer_trial_pending_ = false;
+    peer_trial_done_ = false;
     peer_trial_attempt_ = true;
   } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && peer_trial_attempt_) {
     peer_trial_attempt_ = false;
     if (!peer_trial_done_ && !peer_trial_pending_) {
       peer_trial_pending_ = true;
       peer_trial_started_ = millis();
-      ESP_LOGI("espnow.peer", "HB5 peer-only trial scheduled in 7000ms; once per boot");
+      ESP_LOGI("espnow.peer", "HB6 peer-only trial scheduled in 7000ms; once per failed attempt");
     }
   }
 }
@@ -114,7 +117,7 @@ void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
   if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 15000U) {
     peer_trial_pending_ = false;
     peer_trial_done_ = true;
-    ESP_LOGW("espnow.peer", "HB5 trial canceled: missed idle window; reset bench to repeat");
+    ESP_LOGW("espnow.peer", "HB6 trial canceled: missed idle window; waiting for next failed attempt");
   }
   if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 7000U &&
       radio_transmission_owner_ == RadioTransmissionOwner::NONE &&
@@ -123,7 +126,7 @@ void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
     peer_trial_done_ = true;
     this->log_peer_diagnostics("before_peer_mod");
     const auto result = radio_.diagnostic_reapply_peer(heartbeat_peer_);
-    ESP_LOGI("espnow.peer", "HB5 peer_reapply result=%d peer=%u; same LMK; no callback registration or deinit",
+    ESP_LOGI("espnow.peer", "HB6 peer_reapply result=%d peer=%u; same LMK; no callback registration or deinit",
              int(result), unsigned(heartbeat_peer_));
     this->log_peer_diagnostics("after_peer_mod");
   }
