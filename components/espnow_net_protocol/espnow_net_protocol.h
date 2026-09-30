@@ -56,6 +56,7 @@ class EspNowNetProtocolComponent : public Component,
     return radio_.add_peer(id, address, lmk_hex);
   }
 #ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  void log_peer_diagnostics(const char *phase);
   void configure_heartbeat(const char *peer, uint32_t interval_ms, uint32_t timeout_ms) {
     heartbeat_peer_ = radio_.peer_index(peer);
     heartbeat_interval_ = interval_ms;

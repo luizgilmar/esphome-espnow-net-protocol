@@ -3,9 +3,40 @@
 #include "espnow_net_protocol.h"
 #include "esphome/core/log.h"
 #include <esp_wifi.h>
+#include <cstring>
 
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
+
+void EspNowNetProtocolComponent::log_peer_diagnostics(const char *phase) {
+  uint8_t channel = 0;
+  wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
+  wifi_mode_t mode = WIFI_MODE_NULL;
+  const auto channel_error = esp_wifi_get_channel(&channel, &secondary);
+  const auto mode_error = esp_wifi_get_mode(&mode);
+  ESP_LOGI("espnow.peer", "HB3 phase=%s radio_channel=%d channel_error=%d mode=%d mode_error=%d",
+           phase, channel_error == ESP_OK ? int(channel) : -1, int(channel_error),
+           mode_error == ESP_OK ? int(mode) : -1, int(mode_error));
+  esp_now_peer_num_t count{};
+  const auto count_error = esp_now_get_peer_num(&count);
+  ESP_LOGI("espnow.peer", "HB3 phase=%s count_error=%d total=%d encrypted=%d rx=%u tx=%u",
+           phase, int(count_error), count_error == ESP_OK ? int(count.total_num) : -1,
+           count_error == ESP_OK ? int(count.encrypt_num) : -1,
+           unsigned(radio_.received_frame_count()), unsigned(radio_.sent_frame_count()));
+  for (size_t i = 0; i < radio_.peer_count(); ++i) {
+    const auto *expected = radio_.peer(static_cast<PeerIndex>(i));
+    if (expected == nullptr) continue;
+    esp_now_peer_info_t actual{};
+    const auto error = esp_now_get_peer(expected->address, &actual);
+    if (error != ESP_OK) {
+      ESP_LOGW("espnow.peer", "HB3 phase=%s peer=%u get_error=%d fields=unavailable", phase, unsigned(i), int(error));
+      continue;
+    }
+    const bool same_lmk = std::memcmp(actual.lmk, expected->lmk, PeerIdentity::KEY_SIZE) == 0;
+    ESP_LOGI("espnow.peer", "HB3 phase=%s peer=%u get_error=0 channel=%u ifidx=%d encrypt=%d lmk_match=%d",
+             phase, unsigned(i), unsigned(actual.channel), int(actual.ifidx), int(actual.encrypt), int(same_lmk));
+  }
+}
 
 bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &received, uint32_t now) {
   const auto &bytes = received.frame.data;
@@ -15,7 +46,7 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
   HeartbeatPacket packet{};
   if (received.peer_index != heartbeat_peer_ || !HeartbeatPacket::decode(bytes.data(), bytes.size(), packet))
     return true;
-  ESP_LOGI(HB_TAG, "HB2 RX kind=%s seq=%u rssi_dbm=%d channel=%u",
+  ESP_LOGD(HB_TAG, "HB2 RX kind=%s seq=%u rssi_dbm=%d channel=%u",
            packet.kind == 1 ? "PING" : "PONG", unsigned(packet.sequence),
            int(received.rssi), unsigned(received.channel));
   if (packet.kind == 1) {
@@ -26,7 +57,7 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
       heartbeat_reply_.responder_boot = local_boot_id_;
       heartbeat_reply_received_ = now;
       heartbeat_reply_pending_ = true;
-      ESP_LOGI(HB_TAG, "HB1 received PING seq=%u peer=%u", unsigned(packet.sequence), unsigned(received.peer_index));
+      ESP_LOGD(HB_TAG, "HB1 received PING seq=%u peer=%u", unsigned(packet.sequence), unsigned(received.peer_index));
     }
   } else {
     uint32_t rtt = 0;
