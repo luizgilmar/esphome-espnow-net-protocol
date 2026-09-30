@@ -57,6 +57,7 @@ class EspNowNetProtocolComponent : public Component,
   }
 #ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
   void log_peer_diagnostics(const char *phase);
+  void diagnostic_callback_trial_phase(const char *phase);
   void configure_heartbeat(const char *peer, uint32_t interval_ms, uint32_t timeout_ms) {
     heartbeat_peer_ = radio_.peer_index(peer);
     heartbeat_interval_ = interval_ms;
@@ -222,6 +223,10 @@ class EspNowNetProtocolComponent : public Component,
 #ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
   bool receive_heartbeat_(const EspNowReceivedFrame &received, uint32_t now);
   void heartbeat_tick_(uint32_t now);
+  bool callback_trial_attempt_{false};
+  bool callback_trial_pending_{false};
+  bool callback_trial_done_{false};
+  uint32_t callback_trial_started_{0};
   void dispatch_heartbeat_(uint32_t now);
   PeerIndex heartbeat_peer_{INVALID_PEER_INDEX};
   HeartbeatExchange heartbeat_exchange_{};

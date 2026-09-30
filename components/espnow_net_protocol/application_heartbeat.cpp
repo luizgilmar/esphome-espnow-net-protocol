@@ -8,6 +8,24 @@
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
 
+void EspNowNetProtocolComponent::diagnostic_callback_trial_phase(const char *phase) {
+  this->log_peer_diagnostics(phase);
+  if (std::strcmp(phase, "wifi_connected") == 0) {
+    callback_trial_attempt_ = false;
+    if (callback_trial_pending_) ESP_LOGI("espnow.peer", "HB4 trial canceled: Wi-Fi recovered");
+    callback_trial_pending_ = false;
+  } else if (std::strcmp(phase, "before_attempt") == 0) {
+    callback_trial_attempt_ = true;
+  } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && callback_trial_attempt_) {
+    callback_trial_attempt_ = false;
+    if (!callback_trial_done_ && !callback_trial_pending_) {
+      callback_trial_pending_ = true;
+      callback_trial_started_ = millis();
+      ESP_LOGI("espnow.peer", "HB4 callback-only trial scheduled in 7000ms; once per boot");
+    }
+  }
+}
+
 void EspNowNetProtocolComponent::log_peer_diagnostics(const char *phase) {
   uint8_t channel = 0;
   wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
@@ -75,6 +93,14 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
 }
 
 void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
+  if (callback_trial_pending_ && uint32_t(now - callback_trial_started_) >= 7000U) {
+    callback_trial_pending_ = false;
+    callback_trial_done_ = true;
+    this->log_peer_diagnostics("before_callback_register");
+    const auto result = radio_.diagnostic_reregister_receive_callback();
+    ESP_LOGI("espnow.peer", "HB4 register_recv_cb result=%d; peers and keys unchanged; no deinit", int(result));
+    this->log_peer_diagnostics("after_callback_register");
+  }
   if (uint32_t(now - heartbeat_rf_logged_) >= 10000U) {
     heartbeat_rf_logged_ = now;
     int8_t power = 0;

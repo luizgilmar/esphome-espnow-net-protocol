@@ -229,6 +229,12 @@ bool EspIdfEspNowEncryptedRadio::add_configured_peer_(
   return result == ESP_OK;
 }
 
+esp_err_t EspIdfEspNowEncryptedRadio::diagnostic_reregister_receive_callback() {
+  if (!initialized_ || instance_ != this) return ESP_ERR_ESPNOW_NOT_INIT;
+  // Deliberately do not unregister, modify peers, or reinitialize the radio.
+  return esp_now_register_recv_cb(receive_callback_);
+}
+
 bool EspIdfEspNowEncryptedRadio::refresh_peer_(PeerIndex peer_index,
                                                 uint32_t now_ms) {
   const PeerIdentity *configured_peer = peers_.peer(peer_index);
