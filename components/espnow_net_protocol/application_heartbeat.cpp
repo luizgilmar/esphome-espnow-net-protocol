@@ -8,6 +8,22 @@
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
 
+void EspNowNetProtocolComponent::reconnect_peer_recovery_phase(const char *phase) {
+  if (std::strcmp(phase, "wifi_connected") == 0) {
+    if (reconnect_peer_pending_) ESP_LOGI("espnow.peer", "RC1 recovery canceled: Wi-Fi connected");
+    reconnect_peer_attempt_ = false;
+    reconnect_peer_pending_ = false;
+  } else if (std::strcmp(phase, "before_attempt") == 0) {
+    if (reconnect_peer_pending_) ESP_LOGW("espnow.peer", "RC1 recovery canceled: no idle window before next attempt");
+    reconnect_peer_pending_ = false;
+    reconnect_peer_attempt_ = true;
+  } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && reconnect_peer_attempt_) {
+    reconnect_peer_attempt_ = false;
+    reconnect_peer_pending_ = true;
+    ESP_LOGI("espnow.peer", "RC1 recovery queued; waiting for idle transmitter; peers=%u", unsigned(radio_.peer_count()));
+  }
+}
+
 void EspNowNetProtocolComponent::diagnostic_peer_trial_phase(const char *phase) {
   this->log_peer_diagnostics(phase);
   if (std::strcmp(phase, "wifi_connected") == 0) {
@@ -114,6 +130,20 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
 }
 
 void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
+  if (reconnect_peer_pending_ && radio_transmission_owner_ == RadioTransmissionOwner::NONE &&
+      reliable_message_owner_ == ReliableMessageOwner::NONE && sender_.state() == ReliableSenderState::IDLE) {
+    reconnect_peer_pending_ = false;
+    this->log_peer_diagnostics("rc1_before_recovery");
+    for (size_t i = 0; i < radio_.peer_count(); ++i) {
+      const auto result = radio_.diagnostic_reapply_peer(static_cast<PeerIndex>(i));
+      if (result == ESP_OK) {
+        ESP_LOGI("espnow.peer", "RC1 peer_reapply peer=%u result=0", unsigned(i));
+      } else {
+        ESP_LOGW("espnow.peer", "RC1 peer_reapply peer=%u result=%d; retry after next failed association", unsigned(i), int(result));
+      }
+    }
+    this->log_peer_diagnostics("rc1_after_recovery");
+  }
   if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 15000U) {
     peer_trial_pending_ = false;
     peer_trial_done_ = true;
