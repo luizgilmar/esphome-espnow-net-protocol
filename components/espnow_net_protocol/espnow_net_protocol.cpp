@@ -628,6 +628,14 @@ void EspNowNetProtocolComponent::process_send_completion_(uint32_t now_ms) {
   if (radio_transmission_owner_ == RadioTransmissionOwner::NONE ||
       completion.peer_index != radio_transmission_peer_)
     return;
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
+  if (radio_transmission_owner_ == RadioTransmissionOwner::HEARTBEAT) {
+    ESP_LOGI("espnow.hb", "HB2 MAC_DONE kind=%s seq=%u peer=%u success=%u",
+             heartbeat_inflight_kind_ == 1 ? "PING" : "PONG",
+             unsigned(heartbeat_inflight_sequence_), unsigned(completion.peer_index),
+             unsigned(completion.succeeded));
+  }
+#endif
   if (radio_transmission_owner_ == RadioTransmissionOwner::SENDER &&
       sender_.frame_in_flight() &&
       completion.peer_index == radio_transmission_peer_)

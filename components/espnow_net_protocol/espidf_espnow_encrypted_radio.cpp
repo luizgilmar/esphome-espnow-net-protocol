@@ -506,6 +506,10 @@ void EspIdfEspNowEncryptedRadio::receive_callback_(
     return;
   }
   received.peer_index = static_cast<uint8_t>(peer_index);
+  if (info->rx_ctrl != nullptr) {
+    received.rssi = info->rx_ctrl->rssi;
+    received.channel = info->rx_ctrl->channel;
+  }
   if (!radio->received_frames_.push(received)) {
     radio->dropped_frame_count_.fetch_add(1, std::memory_order_relaxed);
     return;

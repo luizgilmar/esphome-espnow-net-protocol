@@ -229,6 +229,8 @@ class EspNowNetProtocolComponent : public Component,
   uint32_t heartbeat_interval_{0}, heartbeat_timeout_{1500};
   uint32_t heartbeat_last_attempt_{0}, heartbeat_reply_received_{0}, heartbeat_sequence_{0};
   uint32_t heartbeat_sent_{0}, heartbeat_ok_{0}, heartbeat_lost_{0}, heartbeat_send_errors_{0};
+  uint32_t heartbeat_rf_logged_{0}, heartbeat_inflight_sequence_{0};
+  uint8_t heartbeat_inflight_kind_{0};
 #endif
   enum class ReliableMessageOwner : uint8_t {
     NONE,

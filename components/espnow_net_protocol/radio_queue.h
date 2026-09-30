@@ -48,6 +48,8 @@ template<typename T, size_t Capacity> class EspNowSpscQueue {
 struct EspNowReceivedFrame {
   uint8_t peer_index{0};
   EspNowRadioFrame frame{};
+  int8_t rssi{127}; // 127 means metadata unavailable, not a measured signal.
+  uint8_t channel{0};
 };
 
 struct EspNowSendCompletion {

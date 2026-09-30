@@ -2,6 +2,7 @@
 #ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
 #include "espnow_net_protocol.h"
 #include "esphome/core/log.h"
+#include <esp_wifi.h>
 
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
@@ -14,6 +15,9 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
   HeartbeatPacket packet{};
   if (received.peer_index != heartbeat_peer_ || !HeartbeatPacket::decode(bytes.data(), bytes.size(), packet))
     return true;
+  ESP_LOGI(HB_TAG, "HB2 RX kind=%s seq=%u rssi_dbm=%d channel=%u",
+           packet.kind == 1 ? "PING" : "PONG", unsigned(packet.sequence),
+           int(received.rssi), unsigned(received.channel));
   if (packet.kind == 1) {
     // One bounded reply slot; later requests never overwrite a pending response.
     if (!heartbeat_reply_pending_) {
@@ -40,6 +44,21 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
 }
 
 void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
+  if (uint32_t(now - heartbeat_rf_logged_) >= 10000U) {
+    heartbeat_rf_logged_ = now;
+    int8_t power = 0;
+    wifi_ps_type_t ps = WIFI_PS_NONE;
+    const esp_err_t power_error = esp_wifi_get_max_tx_power(&power);
+    const esp_err_t ps_error = esp_wifi_get_ps(&ps);
+    ESP_LOGI(HB_TAG,
+             "HB2 RF tx_limit_qdbm=%d tx_limit_dbm=%.2f power_error=%d ps=%d ps_error=%d "
+             "rx=%u tx=%u fail=%u dropped_rx=%u dropped_completion=%u rx_queue=%u completion_queue=%u",
+             int(power), double(power) / 4.0, int(power_error), int(ps), int(ps_error),
+             unsigned(radio_.received_frame_count()), unsigned(radio_.sent_frame_count()),
+             unsigned(radio_.failed_send_count()), unsigned(radio_.dropped_frame_count()),
+             unsigned(radio_.dropped_completion_count()), unsigned(radio_.received_queue_depth()),
+             unsigned(radio_.completion_queue_depth()));
+  }
   if (heartbeat_exchange_.expired(now)) {
     heartbeat_exchange_.reset();
     ++heartbeat_lost_;
@@ -64,6 +83,8 @@ void EspNowNetProtocolComponent::dispatch_heartbeat_(uint32_t now) {
     if (radio_.send_frame(heartbeat_peer_, payload, sizeof(payload))) {
       radio_transmission_owner_ = RadioTransmissionOwner::HEARTBEAT;
       radio_transmission_peer_ = heartbeat_peer_;
+      heartbeat_inflight_sequence_ = heartbeat_reply_.sequence;
+      heartbeat_inflight_kind_ = 2;
       ESP_LOGI(HB_TAG, "HB1 sent PONG seq=%u", unsigned(heartbeat_reply_.sequence));
     } else {
       ESP_LOGW(HB_TAG, "HB1 reply send rejected seq=%u", unsigned(heartbeat_reply_.sequence));
@@ -91,6 +112,8 @@ void EspNowNetProtocolComponent::dispatch_heartbeat_(uint32_t now) {
   heartbeat_exchange_.start(ping, now, heartbeat_timeout_);
   radio_transmission_owner_ = RadioTransmissionOwner::HEARTBEAT;
   radio_transmission_peer_ = heartbeat_peer_;
+  heartbeat_inflight_sequence_ = heartbeat_sequence_;
+  heartbeat_inflight_kind_ = 1;
   ESP_LOGI(HB_TAG, "HB1 sent PING seq=%u peer=%u", unsigned(heartbeat_sequence_), unsigned(heartbeat_peer_));
 }
 } // namespace esphome::espnow_net_protocol
