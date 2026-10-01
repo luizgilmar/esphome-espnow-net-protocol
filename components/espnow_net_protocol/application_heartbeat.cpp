@@ -8,22 +8,6 @@
 namespace esphome::espnow_net_protocol {
 static const char *const HB_TAG = "espnow.hb";
 
-void EspNowNetProtocolComponent::reconnect_peer_recovery_phase(const char *phase) {
-  if (std::strcmp(phase, "wifi_connected") == 0) {
-    if (reconnect_peer_pending_) ESP_LOGI("espnow.peer", "RC1 recovery canceled: Wi-Fi connected");
-    reconnect_peer_attempt_ = false;
-    reconnect_peer_pending_ = false;
-  } else if (std::strcmp(phase, "before_attempt") == 0) {
-    if (reconnect_peer_pending_) ESP_LOGW("espnow.peer", "RC1 recovery canceled: no idle window before next attempt");
-    reconnect_peer_pending_ = false;
-    reconnect_peer_attempt_ = true;
-  } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && reconnect_peer_attempt_) {
-    reconnect_peer_attempt_ = false;
-    reconnect_peer_pending_ = true;
-    ESP_LOGI("espnow.peer", "RC1 recovery queued; waiting for idle transmitter; peers=%u", unsigned(radio_.peer_count()));
-  }
-}
-
 void EspNowNetProtocolComponent::diagnostic_peer_trial_phase(const char *phase) {
   this->log_peer_diagnostics(phase);
   if (std::strcmp(phase, "wifi_connected") == 0) {
@@ -60,36 +44,6 @@ void EspNowNetProtocolComponent::diagnostic_callback_trial_phase(const char *pha
       callback_trial_started_ = millis();
       ESP_LOGI("espnow.peer", "HB4 callback-only trial scheduled in 7000ms; once per boot");
     }
-  }
-}
-
-void EspNowNetProtocolComponent::log_peer_diagnostics(const char *phase) {
-  uint8_t channel = 0;
-  wifi_second_chan_t secondary = WIFI_SECOND_CHAN_NONE;
-  wifi_mode_t mode = WIFI_MODE_NULL;
-  const auto channel_error = esp_wifi_get_channel(&channel, &secondary);
-  const auto mode_error = esp_wifi_get_mode(&mode);
-  ESP_LOGI("espnow.peer", "HB3 phase=%s radio_channel=%d channel_error=%d mode=%d mode_error=%d",
-           phase, channel_error == ESP_OK ? int(channel) : -1, int(channel_error),
-           mode_error == ESP_OK ? int(mode) : -1, int(mode_error));
-  esp_now_peer_num_t count{};
-  const auto count_error = esp_now_get_peer_num(&count);
-  ESP_LOGI("espnow.peer", "HB3 phase=%s count_error=%d total=%d encrypted=%d rx=%u tx=%u",
-           phase, int(count_error), count_error == ESP_OK ? int(count.total_num) : -1,
-           count_error == ESP_OK ? int(count.encrypt_num) : -1,
-           unsigned(radio_.received_frame_count()), unsigned(radio_.sent_frame_count()));
-  for (size_t i = 0; i < radio_.peer_count(); ++i) {
-    const auto *expected = radio_.peer(static_cast<PeerIndex>(i));
-    if (expected == nullptr) continue;
-    esp_now_peer_info_t actual{};
-    const auto error = esp_now_get_peer(expected->address, &actual);
-    if (error != ESP_OK) {
-      ESP_LOGW("espnow.peer", "HB3 phase=%s peer=%u get_error=%d fields=unavailable", phase, unsigned(i), int(error));
-      continue;
-    }
-    const bool same_lmk = std::memcmp(actual.lmk, expected->lmk, PeerIdentity::KEY_SIZE) == 0;
-    ESP_LOGI("espnow.peer", "HB3 phase=%s peer=%u get_error=0 channel=%u ifidx=%d encrypt=%d lmk_match=%d",
-             phase, unsigned(i), unsigned(actual.channel), int(actual.ifidx), int(actual.encrypt), int(same_lmk));
   }
 }
 
@@ -130,20 +84,6 @@ bool EspNowNetProtocolComponent::receive_heartbeat_(const EspNowReceivedFrame &r
 }
 
 void EspNowNetProtocolComponent::heartbeat_tick_(uint32_t now) {
-  if (reconnect_peer_pending_ && radio_transmission_owner_ == RadioTransmissionOwner::NONE &&
-      reliable_message_owner_ == ReliableMessageOwner::NONE && sender_.state() == ReliableSenderState::IDLE) {
-    reconnect_peer_pending_ = false;
-    this->log_peer_diagnostics("rc1_before_recovery");
-    for (size_t i = 0; i < radio_.peer_count(); ++i) {
-      const auto result = radio_.diagnostic_reapply_peer(static_cast<PeerIndex>(i));
-      if (result == ESP_OK) {
-        ESP_LOGI("espnow.peer", "RC1 peer_reapply peer=%u result=0", unsigned(i));
-      } else {
-        ESP_LOGW("espnow.peer", "RC1 peer_reapply peer=%u result=%d; retry after next failed association", unsigned(i), int(result));
-      }
-    }
-    this->log_peer_diagnostics("rc1_after_recovery");
-  }
   if (peer_trial_pending_ && uint32_t(now - peer_trial_started_) >= 15000U) {
     peer_trial_pending_ = false;
     peer_trial_done_ = true;

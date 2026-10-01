@@ -205,6 +205,10 @@ bool EspNowNetProtocolComponent::cancel_command(TransactionId transaction_id) {
 }
 
 void EspNowNetProtocolComponent::setup() {
+#ifdef USE_WIFI_FIXED_CHANNEL
+  if (reconnect_wifi_ != nullptr)
+    ESP_LOGI("espnow.peer", "RC2 Wi-Fi recovery enabled; independent of heartbeat");
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
   diagnostics_.setup();
 #endif
@@ -236,6 +240,7 @@ void EspNowNetProtocolComponent::loop() {
 #ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
   recovery_permitted &= command_client_state_2_ == CommandClientState::IDLE;
 #endif
+  this->reconnect_peer_recovery_tick_(recovery_permitted);
   radio_.set_recovery_permitted(recovery_permitted);
 #ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
   const bool trace_radio = now_ms - diagnostic_radio_probe_ms_ >= 5000U;

@@ -1,5 +1,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
+import esphome.final_validate as fv
+from esphome.core import CORE
 from esphome.components.esp32 import (
     add_idf_sdkconfig_option,
     include_builtin_idf_component,
@@ -167,10 +169,24 @@ def _validate_heartbeat(config):
     return config
 
 
+def _validate_wifi_reconnect_recovery(config):
+    if not config.get("wifi_reconnect_recovery", False):
+        return config
+    wifi_config = fv.full_config.get().get("wifi", {})
+    if wifi_config.get("fixed_channel") != 1 or config[CONF_CHANNEL] != 1:
+        raise cv.Invalid("wifi_reconnect_recovery requires wifi.fixed_channel: 1 and ESP-NOW channel: 1")
+    if "fixed_channel_retry_interval" in wifi_config:
+        raise cv.Invalid("wifi_reconnect_recovery uses adaptive retries; remove wifi.fixed_channel_retry_interval")
+    return config
+
+
+FINAL_VALIDATE_SCHEMA = _validate_wifi_reconnect_recovery
+
 CONFIG_SCHEMA = cv.All(
     cv.Schema({
         cv.GenerateID(): cv.declare_id(EspNowNetProtocolComponent),
         cv.Optional(CONF_DIAGNOSTICS, default=False): cv.boolean,
+        cv.Optional("wifi_reconnect_recovery", default=False): cv.boolean,
         cv.Optional("heartbeat"): cv.Schema({
             cv.Required("peer"): cv.string_strict,
             cv.Optional("send_interval", default="0s"): cv.positive_time_period_milliseconds,
@@ -204,6 +220,9 @@ async def to_code(config):
     )
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+    if config.get("wifi_reconnect_recovery", False):
+        wifi_var = await cg.get_variable(CORE.config["wifi"][CONF_ID])
+        cg.add(var.set_wifi_reconnect_recovery(wifi_var))
     cg.add(var.set_ack_timeout(config[CONF_ACK_TIMEOUT].total_milliseconds))
     cg.add(var.set_max_attempts(config[CONF_MAX_ATTEMPTS]))
     if config[CONF_INTERRUPTIBLE_INBOUND]:

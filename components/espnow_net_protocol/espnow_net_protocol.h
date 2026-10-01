@@ -1,6 +1,9 @@
 #pragma once
 
 #include "esphome/core/component.h"
+#ifdef USE_WIFI_FIXED_CHANNEL
+#include "esphome/components/wifi/wifi_component.h"
+#endif
 #include "command_dispatcher.h"
 #include "command_codec.h"
 #ifdef USE_ESPNOW_NET_PROTOCOL_IDENTITY_OBSERVATION
@@ -55,11 +58,14 @@ class EspNowNetProtocolComponent : public Component,
   bool add_peer(const char *id, const char *address, const char *lmk_hex) {
     return radio_.add_peer(id, address, lmk_hex);
   }
-#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
   void log_peer_diagnostics(const char *phase);
+  void reconnect_peer_recovery_phase(const char *phase);
+#ifdef USE_WIFI_FIXED_CHANNEL
+  void set_wifi_reconnect_recovery(wifi::WiFiComponent *wifi_component);
+#endif
+#ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
   void diagnostic_callback_trial_phase(const char *phase);
   void diagnostic_peer_trial_phase(const char *phase);
-  void reconnect_peer_recovery_phase(const char *phase);
   void configure_heartbeat(const char *peer, uint32_t interval_ms, uint32_t timeout_ms) {
     heartbeat_peer_ = radio_.peer_index(peer);
     heartbeat_interval_ = interval_ms;
@@ -221,14 +227,18 @@ class EspNowNetProtocolComponent : public Component,
 #endif
 
  protected:
+  void reconnect_peer_recovery_tick_(bool idle);
+  bool reconnect_peer_attempt_{false};
+  bool reconnect_peer_pending_{false};
+#ifdef USE_WIFI_FIXED_CHANNEL
+  wifi::WiFiComponent *reconnect_wifi_{nullptr};
+#endif
   enum class RadioTransmissionOwner : uint8_t { NONE, SENDER, ACK, HEARTBEAT };
 #ifdef USE_ESPNOW_APPLICATION_HEARTBEAT
   bool receive_heartbeat_(const EspNowReceivedFrame &received, uint32_t now);
   void heartbeat_tick_(uint32_t now);
   bool callback_trial_attempt_{false};
   bool peer_trial_attempt_{false};
-  bool reconnect_peer_attempt_{false};
-  bool reconnect_peer_pending_{false};
   bool peer_trial_pending_{false};
   bool peer_trial_done_{false};
   uint32_t peer_trial_started_{0};
