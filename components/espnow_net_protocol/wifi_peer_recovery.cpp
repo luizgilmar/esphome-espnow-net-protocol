@@ -17,22 +17,30 @@ void EspNowNetProtocolComponent::set_wifi_reconnect_recovery(wifi::WiFiComponent
 #endif
 
 void EspNowNetProtocolComponent::reconnect_peer_recovery_phase(const char *phase) {
+  if (std::strcmp(phase, "wifi_connected") == 0) record_recovery_event_("wifi_connected");
+  else if (std::strcmp(phase, "before_attempt") == 0) record_recovery_event_("attempt_start");
+  else if (std::strcmp(phase, "retry_after_disconnect") == 0)
+    record_recovery_event_(reconnect_peer_attempt_ ? "attempt_failed" : "retry_boundary");
   if (std::strcmp(phase, "wifi_connected") == 0) {
+    if (reconnect_peer_pending_) record_recovery_event_("cancel_connected");
     if (reconnect_peer_pending_) ESP_LOGI("espnow.peer", "RC2 recovery canceled: Wi-Fi connected");
     reconnect_peer_attempt_ = false;
     reconnect_peer_pending_ = false;
   } else if (std::strcmp(phase, "before_attempt") == 0) {
+    if (reconnect_peer_pending_) record_recovery_event_("cancel_next_attempt");
     if (reconnect_peer_pending_) ESP_LOGW("espnow.peer", "RC2 recovery canceled: no idle window before next attempt");
     reconnect_peer_pending_ = false;
     reconnect_peer_attempt_ = true;
   } else if (std::strcmp(phase, "retry_after_disconnect") == 0 && reconnect_peer_attempt_) {
     reconnect_peer_attempt_ = false;
     reconnect_peer_pending_ = true;
+    record_recovery_event_("recovery_queued");
     ESP_LOGI("espnow.peer", "RC2 recovery queued; waiting for idle transmitter; peers=%u", unsigned(radio_.peer_count()));
   }
 }
 
 void EspNowNetProtocolComponent::reconnect_peer_recovery_tick_(bool idle) {
+  this->recovery_history_tick_();
 #ifdef USE_WIFI_FIXED_CHANNEL
   if (reconnect_wifi_ != nullptr &&
       (!reconnect_wifi_->fixed_channel_operation() || reconnect_wifi_->is_disabled())) {
@@ -47,6 +55,7 @@ void EspNowNetProtocolComponent::reconnect_peer_recovery_tick_(bool idle) {
     this->log_peer_diagnostics("rc2_before_recovery");
     for (size_t i = 0; i < radio_.peer_count(); ++i) {
       const auto result = radio_.diagnostic_reapply_peer(static_cast<PeerIndex>(i));
+      this->record_recovery_event_("peer_reapply", int(result), int(i));
       if (result == ESP_OK) {
         ESP_LOGI("espnow.peer", "RC2 peer_reapply peer=%u result=0", unsigned(i));
       } else {

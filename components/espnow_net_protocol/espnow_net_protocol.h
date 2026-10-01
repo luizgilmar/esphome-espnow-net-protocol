@@ -58,6 +58,7 @@ class EspNowNetProtocolComponent : public Component,
   bool add_peer(const char *id, const char *address, const char *lmk_hex) {
     return radio_.add_peer(id, address, lmk_hex);
   }
+  void request_recovery_history();
   void log_peer_diagnostics(const char *phase);
   void reconnect_peer_recovery_phase(const char *phase);
 #ifdef USE_WIFI_FIXED_CHANNEL
@@ -228,6 +229,21 @@ class EspNowNetProtocolComponent : public Component,
 
  protected:
   void reconnect_peer_recovery_tick_(bool idle);
+  void record_recovery_event_(const char *event, int result = 0, int peer = -1);
+  void recovery_history_tick_();
+#ifdef USE_ESPNOW_NET_PROTOCOL_DIAGNOSTICS
+  struct RecoveryEvent {
+    const char *event{nullptr};
+    uint32_t uptime{0}, rx{0}, tx{0};
+    int result{0}, peer{-1}, channel{-1};
+  };
+  static constexpr size_t RECOVERY_HISTORY_SIZE = 96;
+  RecoveryEvent recovery_history_[RECOVERY_HISTORY_SIZE]{};
+  RecoveryEvent recovery_replay_[RECOVERY_HISTORY_SIZE]{};
+  size_t recovery_next_{0}, recovery_count_{0}, recovery_replay_count_{0}, recovery_replay_index_{0};
+  uint32_t recovery_total_{0}, recovery_dump_due_{0};
+  bool recovery_dump_requested_{false}, recovery_dump_active_{false};
+#endif
   bool reconnect_peer_attempt_{false};
   bool reconnect_peer_pending_{false};
 #ifdef USE_WIFI_FIXED_CHANNEL
