@@ -90,7 +90,7 @@ class EspNowProtocolRuntime {
     return this->accept_application_message_(*envelope);
   }
 
-  bool peek_application_message(EspNowInboundApplicationMessage &message) const {
+  bool take_application_message(EspNowInboundApplicationMessage &message) {
     if (!application_message_ready_) return false;
     message = {};
     const EspNowFrameEnvelope *envelope = reassembler_.complete_envelope();
@@ -100,11 +100,6 @@ class EspNowProtocolRuntime {
       return false;
     message.peer_index = application_peer_index_;
     message.message.envelope = *envelope;
-    return true;
-  }
-
-  bool take_application_message(EspNowInboundApplicationMessage &message) {
-    if (!this->peek_application_message(message)) return false;
     reassembler_.release_complete();
     application_message_ready_ = false;
     return true;
