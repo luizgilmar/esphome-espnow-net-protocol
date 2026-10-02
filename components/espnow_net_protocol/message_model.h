@@ -85,6 +85,9 @@ struct NetError {
 };
 
 struct NetResult {
+  // Local metadata only; never encoded on the wire. A delivery timeout is
+  // not an authoritative failure of the remote application execution.
+  bool transport_failure{false};
   TransactionId transaction_id{0};
   NetResultStatus status{NetResultStatus::FAILED};
   NetExecutionContext execution{};

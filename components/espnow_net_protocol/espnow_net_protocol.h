@@ -179,6 +179,24 @@ class EspNowNetProtocolComponent : public Component,
   bool start_command(PeerIndex peer, const NetCommand &command,
                      uint32_t now_ms);
   bool cancel_command(TransactionId transaction_id);
+  // A transaction coordinator may own the application-result deadline.
+  // Link-layer delivery retries remain owned by this protocol endpoint.
+  bool use_external_result_deadline(TransactionId transaction_id) {
+    if (transaction_id == 0) return false;
+    if (command_client_state_ != CommandClientState::IDLE &&
+        command_client_command_.transaction_id == transaction_id) {
+      command_client_external_deadline_[0] = true;
+      return true;
+    }
+#ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
+    if (command_client_state_2_ != CommandClientState::IDLE &&
+        command_client_command_2_.transaction_id == transaction_id) {
+      command_client_external_deadline_[1] = true;
+      return true;
+    }
+#endif
+    return false;
+  }
   void set_command_result_observer(NetCommandResultObserver *observer) {
     if (observer == nullptr) return;
     for (auto *registered : command_result_observers_)
@@ -336,6 +354,7 @@ class EspNowNetProtocolComponent : public Component,
   uint32_t command_client_failure_count_{0};
   uint32_t command_client_cancel_count_{0};
   CommandClientState command_client_state_{CommandClientState::IDLE};
+  bool command_client_external_deadline_[2]{};
 #ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
   CommandClientState command_client_state_2_{CommandClientState::IDLE};
 #endif

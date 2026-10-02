@@ -142,6 +142,7 @@ bool EspNowNetProtocolComponent::start_command(
     return false;
   if (slot == 0) {
     command_client_command_ = command;
+    command_client_external_deadline_[0] = false;
     command_client_peer_ = peer;
     command_client_started_ms_ = now_ms;
     command_client_state_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
@@ -149,6 +150,7 @@ bool EspNowNetProtocolComponent::start_command(
 #ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
   else {
     command_client_command_2_ = command;
+    command_client_external_deadline_[1] = false;
     command_client_peer_2_ = peer;
     command_client_started_ms_2_ = now_ms;
     command_client_state_2_ = CommandClientState::WAITING_FOR_DELIVERY_ACK;
@@ -272,11 +274,13 @@ void EspNowNetProtocolComponent::loop() {
   process_received_frame_();
   process_application_message_(now_ms);
   if (command_client_state_ == CommandClientState::WAITING_FOR_RESULT &&
+      !command_client_external_deadline_[0] &&
       now_ms - command_client_started_ms_ >= command_client_command_.timeout_ms)
     fail_command_client_(NetErrorCode::TIMED_OUT,
                          "functional result timed out", now_ms);
 #ifdef USE_ESPNOW_NET_PROTOCOL_DUAL_COMMAND_CLIENT
   if (command_client_state_2_ == CommandClientState::WAITING_FOR_RESULT &&
+      !command_client_external_deadline_[1] &&
       now_ms - command_client_started_ms_2_ >=
           command_client_command_2_.timeout_ms)
     fail_command_client_(NetErrorCode::TIMED_OUT,
@@ -561,6 +565,7 @@ void EspNowNetProtocolComponent::fail_command_client_(
 #endif
   NetResult result{};
   result.transaction_id = command->transaction_id;
+  result.transport_failure = true;
   result.status = NetResultStatus::FAILED;
   result.latency_ms = now_ms - started_ms;
   result.error.code = error;
