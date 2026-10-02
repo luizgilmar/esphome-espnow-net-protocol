@@ -132,8 +132,14 @@ class EspNowNetProtocolComponent : public Component,
     result_message_ready_ = false;
     return true;
   }
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+  void set_parallel_inbound(bool enabled) { parallel_inbound_ = enabled; }
+#endif
   void set_command_handler(NetCommandHandler *handler) {
     command_dispatcher_.set_handler(handler);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+    parallel_dispatcher_.set_handler(handler);
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
     interrupt_dispatcher_.set_handler(handler);
 #endif
@@ -145,6 +151,9 @@ class EspNowNetProtocolComponent : public Component,
 #endif
   void set_observe_application_identity(bool enabled) {
     command_dispatcher_.set_identity_observer(enabled ? this : nullptr);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+    parallel_dispatcher_.set_identity_observer(enabled ? this : nullptr);
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
     interrupt_dispatcher_.set_identity_observer(enabled ? this : nullptr);
 #endif
@@ -305,6 +314,10 @@ class EspNowNetProtocolComponent : public Component,
   EspNowProtocolRuntime runtime_{};
   ReliableMessageSender sender_{};
   InboundCommandDispatcher command_dispatcher_{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+  InboundCommandDispatcher parallel_dispatcher_{};
+  bool parallel_inbound_{false};
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   InboundCommandDispatcher interrupt_dispatcher_{};
   bool interruptible_inbound_{false};

@@ -113,9 +113,8 @@ class InboundCommandDispatcher {
     return true;
   }
 
-  bool accept_interrupt(const EspNowInboundApplicationMessage &inbound,
-                        const InboundCommandDispatcher &operation,
-                        uint32_t now_ms) {
+  bool can_accept_interrupt(const EspNowInboundApplicationMessage &inbound,
+                            const InboundCommandDispatcher &operation) {
     if (state_ != InboundCommandDispatcherState::IDLE ||
         operation.state_ != InboundCommandDispatcherState::ACTIVE)
       return false;
@@ -133,7 +132,13 @@ class InboundCommandDispatcher {
                     operation.command_.source_device_id.c_str()) != 0 ||
         incoming.source_boot_id != operation.command_.source_boot_id)
       return false;
-    return this->accept(inbound, now_ms);
+    return true;
+  }
+
+  bool accept_interrupt(const EspNowInboundApplicationMessage &inbound,
+                        const InboundCommandDispatcher &operation,
+                        uint32_t now_ms) {
+    return this->can_accept_interrupt(inbound, operation) && this->accept(inbound, now_ms);
   }
 
   void loop(uint32_t now_ms) {

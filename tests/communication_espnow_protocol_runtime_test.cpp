@@ -33,7 +33,13 @@ int main() {
          EspNowProtocolAcceptResult::APPLICATION_MESSAGE_READY);
 
   EspNowInboundApplicationMessage inbound{};
+  assert(runtime.peek_application_message(inbound));
+  assert(runtime.application_message_ready());
+  auto peeked = inbound;
+  assert(runtime.peek_application_message(inbound));
+  assert(inbound.message.envelope.transaction_id == peeked.message.envelope.transaction_id);
   assert(runtime.take_application_message(inbound));
+  assert(!runtime.application_message_ready());
   assert(inbound.peer_index == 1);
   assert(inbound.message.data.size() == sizeof(payload));
   assert(std::memcmp(inbound.message.data.data(), payload, sizeof(payload)) == 0);
