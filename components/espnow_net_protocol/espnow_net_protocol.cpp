@@ -287,6 +287,9 @@ void EspNowNetProtocolComponent::loop() {
                          "functional result timed out", now_ms, 1);
 #endif
   command_dispatcher_.loop(now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+  if (parallel_inbound_) parallel_dispatcher_.loop(now_ms);
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   if (interruptible_inbound_) interrupt_dispatcher_.loop(now_ms);
 #endif
@@ -309,16 +312,25 @@ void EspNowNetProtocolComponent::process_application_message_(
   const bool late_terminal = inbound_matches_last_terminal_();
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   const bool interrupt_lane_available = interruptible_inbound_ &&
-      command_dispatcher_.state() == InboundCommandDispatcherState::ACTIVE &&
-      interrupt_dispatcher_.state() == InboundCommandDispatcherState::IDLE;
+      (command_dispatcher_.state() == InboundCommandDispatcherState::ACTIVE
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+       || (parallel_inbound_ && parallel_dispatcher_.state() == InboundCommandDispatcherState::ACTIVE)
+#endif
+      ) && interrupt_dispatcher_.state() == InboundCommandDispatcherState::IDLE;
 #else
   const bool interrupt_lane_available = false;
+#endif
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+  const bool parallel_lane_available = parallel_inbound_ &&
+      parallel_dispatcher_.state() == InboundCommandDispatcherState::IDLE;
+#else
+  const bool parallel_lane_available = false;
 #endif
   // Keep the reassembler-owned payload in place until its bounded consumer is
   // ready. This prevents an ACCEPTED delivery ACK followed by a local drop.
   if ((kind == EspNowFrameKind::COMMAND &&
        command_dispatcher_.state() != InboundCommandDispatcherState::IDLE &&
-       !interrupt_lane_available) ||
+       !interrupt_lane_available && !parallel_lane_available) ||
       (kind == EspNowFrameKind::RESULT && result_message_ready_ &&
        !this->has_unsolicited_result_observer_() &&
        !command_client_result && !late_terminal) ||
@@ -326,16 +338,39 @@ void EspNowNetProtocolComponent::process_application_message_(
        command_result_notification_ready_))
     return;
   EspNowInboundApplicationMessage inbound{};
+#ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
+  // An available STOP lane is not permission to consume an ordinary command.
+  // Keep such a command in the reassembler until a normal lane becomes free.
+  if (kind == EspNowFrameKind::COMMAND &&
+      command_dispatcher_.state() != InboundCommandDispatcherState::IDLE &&
+      !parallel_lane_available) {
+    if (!runtime_.peek_application_message(inbound)) return;
+    bool valid_interrupt = interrupt_lane_available &&
+        interrupt_dispatcher_.can_accept_interrupt(inbound, command_dispatcher_);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+    valid_interrupt |= interrupt_lane_available && parallel_inbound_ &&
+        interrupt_dispatcher_.can_accept_interrupt(inbound, parallel_dispatcher_);
+#endif
+    if (!valid_interrupt) return;
+  }
+#endif
   if (!runtime_.take_application_message(inbound)) return;
   if (inbound.message.envelope.kind == EspNowFrameKind::COMMAND) {
     bool accepted = false;
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
-    if (command_dispatcher_.state() != InboundCommandDispatcherState::IDLE)
-      accepted = interrupt_dispatcher_.accept_interrupt(inbound,
-                                                        command_dispatcher_, now_ms);
-    else
+    if (interruptible_inbound_) {
+      accepted = interrupt_dispatcher_.accept_interrupt(inbound, command_dispatcher_, now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+      if (!accepted && parallel_inbound_)
+        accepted = interrupt_dispatcher_.accept_interrupt(inbound, parallel_dispatcher_, now_ms);
 #endif
-      accepted = command_dispatcher_.accept(inbound, now_ms);
+    }
+#endif
+    if (!accepted) accepted = command_dispatcher_.accept(inbound, now_ms);
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+    if (!accepted && parallel_inbound_)
+      accepted = parallel_dispatcher_.accept(inbound, now_ms);
+#endif
     if (!accepted) {
       ESP_LOGW(TAG, "Inbound command dispatcher busy tx=%llu",
                static_cast<unsigned long long>(
@@ -400,6 +435,10 @@ void EspNowNetProtocolComponent::process_dispatcher_(uint32_t now_ms) {
   // The interrupt response takes priority so a stop can complete while the
   // original operation remains in progress. The sender remains serialized.
   InboundCommandDispatcher *dispatcher = &command_dispatcher_;
+#ifdef USE_ESPNOW_NET_PROTOCOL_PARALLEL_INBOUND
+  if (parallel_inbound_ && !dispatcher->has_result() && parallel_dispatcher_.has_result())
+    dispatcher = &parallel_dispatcher_;
+#endif
 #ifdef USE_ESPNOW_NET_PROTOCOL_INTERRUPTIBLE_INBOUND
   if (interruptible_inbound_ && interrupt_dispatcher_.has_result())
     dispatcher = &interrupt_dispatcher_;
